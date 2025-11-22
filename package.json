@@ -1,0 +1,42 @@
+{
+  "name": "megaeth-chatroom-monorepo",
+  "version": "1.0.0",
+  "description": "Full-stack MegaETH ChatRoom DApp - Smart Contracts + React Frontend",
+  "private": true,
+  "workspaces": [
+    "contracts",
+    "frontend"
+  ],
+  "scripts": {
+    "install:all": "bun install && cd contracts && bun install && cd ../frontend && bun install",
+    "contracts:compile": "cd contracts && bun run compile",
+    "contracts:test": "cd contracts && bun run test",
+    "contracts:deploy": "cd contracts && bun run deploy",
+    "contracts:deploy:local": "cd contracts && bun run deploy:local",
+    "contracts:verify": "cd contracts && bun run verify",
+    "contracts:clean": "cd contracts && bun run clean",
+    "frontend:dev": "cd frontend && bun run dev",
+    "frontend:build": "cd frontend && bun run build",
+    "frontend:preview": "cd frontend && bun run preview",
+    "dev": "bun run frontend:dev",
+    "build": "bun run contracts:compile && bun run frontend:build",
+    "deploy": "bun run contracts:compile && bun run contracts:deploy",
+    "clean": "bun run contracts:clean && rm -rf frontend/dist",
+    "test": "bun run contracts:test"
+  },
+  "keywords": [
+    "ethereum",
+    "smart-contracts",
+    "megaeth",
+    "hardhat",
+    "react",
+    "web3",
+    "dapp",
+    "blockchain"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

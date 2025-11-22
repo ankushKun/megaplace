@@ -1,0 +1,38 @@
+{
+  "name": "megaeth-chatroom-contracts",
+  "version": "1.0.0",
+  "description": "Smart contracts for MegaETH ChatRoom DApp",
+  "main": "index.js",
+  "scripts": {
+    "test": "hardhat test",
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.ts --network megaeth",
+    "deploy:local": "hardhat run scripts/deploy.ts --network hardhat",
+    "verify": "hardhat verify --network megaeth",
+    "clean": "hardhat clean",
+    "typechain": "hardhat compile"
+  },
+  "keywords": [
+    "ethereum",
+    "smart-contracts",
+    "megaeth",
+    "hardhat",
+    "solidity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@types/chai": "^4.3.11",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.10.6",
+    "chai": "^6.2.1",
+    "dotenv": "^17.2.3",
+    "hardhat": "^2.19.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.0"
+  }
+}
