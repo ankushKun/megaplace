@@ -62,7 +62,6 @@ async function updateFrontendConfig(contractAddress: string) {
     // Update config file
     const configContent = `// Contract addresses
 export const MEGAPLACE_ADDRESS = "${contractAddress}" as const;
-export const CHATROOM_ADDRESS = "0x8D6a1b047BC7578A284b6f23394D0C1e579daCD2" as const;
 
 export const MEGAETH_CHAIN = {
   id: 6343,

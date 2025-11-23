@@ -1,7 +1,7 @@
 {
-  "name": "megaeth-chatroom-monorepo",
+  "name": "megaeth-megaplace-monorepo",
   "version": "1.0.0",
-  "description": "Full-stack MegaETH ChatRoom DApp - Smart Contracts + React Frontend",
+  "description": "Full-stack MegaETH Megaplace DApp - Smart Contracts + React Frontend",
   "private": true,
   "workspaces": [
     "contracts",

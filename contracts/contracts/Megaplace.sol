@@ -63,11 +63,14 @@ contract Megaplace {
             index = x + y * 1000;
         }
 
+        // If color is 0 (black), store as 0x010101 to distinguish from unplaced pixels
+        uint32 storedColor = color == 0 ? 0x010101 : color;
+
         // Store pixel data
-        canvas[index] = pixel(color, msg.sender, currentTime);
+        canvas[index] = pixel(storedColor, msg.sender, currentTime);
         lastPlaced[msg.sender] = currentTime;
 
-        emit PixelPlaced(msg.sender, x, y, color, currentTime);
+        emit PixelPlaced(msg.sender, x, y, storedColor, currentTime);
     }
 
     /**
@@ -104,8 +107,11 @@ contract Megaplace {
                 i++;
             }
 
-            canvas[index] = pixel(colors[i - 1], msg.sender, currentTime);
-            emit PixelPlaced(msg.sender, x[i - 1], y[i - 1], colors[i - 1], currentTime);
+            // If color is 0 (black), store as 0x010101 to distinguish from unplaced pixels
+            uint32 storedColor = colors[i - 1] == 0 ? 0x010101 : colors[i - 1];
+
+            canvas[index] = pixel(storedColor, msg.sender, currentTime);
+            emit PixelPlaced(msg.sender, x[i - 1], y[i - 1], storedColor, currentTime);
         }
 
         lastPlaced[msg.sender] = currentTime;

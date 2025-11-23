@@ -1,18 +1,17 @@
-# MegaETH ChatRoom DApp
+# MegaETH Megaplace DApp
 
-A full-stack decentralized chat application built on the MegaETH Testnet. This monorepo contains both the Solidity smart contracts and a React-based frontend for interacting with the blockchain.
+A full-stack decentralized pixel canvas application built on the MegaETH Testnet. This monorepo contains both the Solidity smart contracts and a React-based frontend for interacting with the blockchain.
 
 ## Project Structure
 
 ```
-megaeth-chatroom/
+mega-test/
 ├── contracts/              # Smart contract workspace
 │   ├── contracts/         # Solidity source files
-│   │   └── ChatRoom.sol  # Main chat contract
+│   │   └── Megaplace.sol # Main pixel canvas contract
 │   ├── scripts/          # Deployment scripts
 │   │   └── deploy.ts     # Auto-updates frontend config
 │   ├── test/             # Contract tests (Hardhat)
-│   │   └── ChatRoom.test.ts
 │   ├── hardhat.config.ts # Hardhat configuration
 │   ├── tsconfig.json     # TypeScript config for contracts
 │   ├── package.json      # Contract workspace dependencies
@@ -24,8 +23,8 @@ megaeth-chatroom/
 │   │   ├── components/   # React components
 │   │   ├── hooks/        # Custom Web3 hooks
 │   │   └── contracts/    # Auto-generated from deployment
-│   │       ├── config.ts       # Contract address & network
-│   │       └── ChatRoomABI.json # Contract ABI
+│   │       ├── config.ts           # Contract address & network
+│   │       └── MegaplaceABI.json   # Contract ABI
 │   ├── package.json      # Frontend dependencies
 │   └── vite.config.ts    # Vite build configuration
 │
@@ -172,8 +171,8 @@ The deployment script automatically handles frontend configuration:
    ```
 
    This will:
-   - Deploy the ChatRoom contract
-   - Copy the ABI to `frontend/src/contracts/ChatRoomABI.json`
+   - Deploy the Megaplace contract
+   - Copy the ABI to `frontend/src/contracts/MegaplaceABI.json`
    - Update the contract address in `frontend/src/contracts/config.ts`
    - Display the verification command
 
@@ -194,32 +193,27 @@ bun run dev
 
 ## Smart Contract Features
 
-### ChatRoom.sol
+### Megaplace.sol
+
+A decentralized pixel canvas where users can place colored pixels on a shared canvas.
 
 **Core Functions:**
-- `sendMessage(string memory content)` - Send a message (1-500 characters)
-- `getAllMessages()` - Retrieve all chat messages
-- `getMessage(uint256 index)` - Get specific message
-- `getMessageCount()` - Get total message count
-- `getRecentMessages(uint256 count)` - Get latest N messages
-- `getMessagesBySender(address sender)` - Filter messages by sender
+- `placePixel(uint256 x, uint256 y, uint24 color)` - Place a pixel on the canvas
+- `getPixel(uint256 x, uint256 y)` - Get pixel data at coordinates
+- `getCanvas()` - Get the entire canvas state
+- Canvas dimensions and pixel management
 
 **Events:**
-- `MessageSent(address indexed sender, string content, uint256 timestamp, uint256 messageIndex)`
-
-**Constraints:**
-- Message length: 1-500 characters
-- Permissionless (anyone can send messages)
-- Permanent storage (messages cannot be deleted)
+- `PixelPlaced(address indexed placer, uint256 x, uint256 y, uint24 color, uint256 timestamp)`
 
 ## Frontend Features
 
 - **Wallet Connection** - MetaMask integration via Wagmi
+- **Interactive Canvas** - Click to place pixels
 - **Real-time Updates** - WebSocket event listeners
-- **Message History** - Scrollable chat interface
-- **Transaction Status** - Live deployment feedback
-- **User Highlighting** - Distinguish your own messages
-- **Character Counter** - 500 character limit validation
+- **Color Picker** - Choose your pixel color
+- **Transaction Status** - Live feedback for pixel placement
+- **Canvas Viewing** - See the collaborative artwork
 
 ## Testing
 
@@ -231,14 +225,6 @@ bun run test
 cd contracts
 bun run test
 ```
-
-**Test Coverage:**
-- Contract deployment
-- Message sending & validation
-- Message retrieval (all, by index, by sender)
-- Edge cases (empty messages, length limits)
-- Multiple users
-- Event emission
 
 ## Network Configuration
 
@@ -309,7 +295,6 @@ bun run test
 - **Auto-Configuration** - Deployment script updates frontend automatically
 - **Type Safety** - Full TypeScript support across the stack
 - **Modern Tooling** - Vite, Wagmi, React Query
-- **Comprehensive Testing** - Full contract test coverage
 - **Real-time Updates** - WebSocket event subscriptions
 - **Developer Experience** - Hot reload, fast builds, clear error messages
 

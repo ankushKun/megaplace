@@ -1,17 +1,16 @@
-# ChatRoom Smart Contracts
+# Megaplace Smart Contracts
 
-Smart contracts for the MegaETH ChatRoom DApp.
+Smart contracts for the MegaETH Megaplace DApp - a decentralized pixel canvas.
 
 ## Directory Structure
 
 ```
 contracts/
 ├── contracts/         # Solidity source files
-│   └── ChatRoom.sol  # Main chat room contract
+│   └── Megaplace.sol # Main pixel canvas contract
 ├── scripts/          # Deployment and utility scripts
 │   └── deploy.ts     # Deployment script with frontend auto-update
 ├── test/             # Contract tests
-│   └── ChatRoom.test.ts
 ├── hardhat.config.ts # Hardhat configuration
 ├── tsconfig.json     # TypeScript configuration
 ├── package.json      # Dependencies
@@ -52,57 +51,49 @@ bun run deploy:local
 bun run clean
 ```
 
-## Smart Contract: ChatRoom.sol
+## Smart Contract: Megaplace.sol
 
-A permissionless on-chain chat room that allows anyone to send and read messages.
+A decentralized pixel canvas where users can collaboratively place colored pixels on a shared canvas.
 
 ### Key Features
 
-- **Public Messaging**: Anyone can send messages
-- **Message History**: Query all messages or filter by sender
-- **Event Emission**: All messages emit events for off-chain indexing
-- **Validation**: Enforces 1-500 character message length
-- **Timestamps**: Each message includes block timestamp
+- **Collaborative Canvas**: Users can place pixels on a shared canvas
+- **Color Customization**: Each pixel can be set to any 24-bit RGB color
+- **Ownership Tracking**: Track who placed each pixel
+- **Event Emission**: All pixel placements emit events for off-chain indexing
+- **Timestamps**: Each pixel includes placement timestamp
 
 ### Core Functions
 
 ```solidity
-// Send a message to the chat room
-function sendMessage(string memory content) external
+// Place a pixel on the canvas
+function placePixel(uint256 x, uint256 y, uint24 color) external
 
-// Get all messages in the chat
-function getAllMessages() external view returns (Message[] memory)
+// Get pixel data at specific coordinates
+function getPixel(uint256 x, uint256 y) external view returns (Pixel memory)
 
-// Get a specific message by index
-function getMessage(uint256 index) external view returns (address sender, string memory content, uint256 timestamp)
-
-// Get the latest N messages
-function getRecentMessages(uint256 count) external view returns (Message[] memory)
-
-// Get all messages from a specific sender
-function getMessagesBySender(address sender) external view returns (Message[] memory)
-
-// Get total message count
-function getMessageCount() external view returns (uint256)
+// Get the entire canvas state
+function getCanvas() external view returns (Pixel[][] memory)
 ```
 
 ### Events
 
 ```solidity
-event MessageSent(
-    address indexed sender,
-    string content,
-    uint256 timestamp,
-    uint256 messageIndex
+event PixelPlaced(
+    address indexed placer,
+    uint256 x,
+    uint256 y,
+    uint24 color,
+    uint256 timestamp
 );
 ```
 
 ### Data Structures
 
 ```solidity
-struct Message {
-    address sender;
-    string content;
+struct Pixel {
+    address placer;
+    uint24 color;
     uint256 timestamp;
 }
 ```
@@ -112,10 +103,9 @@ struct Message {
 The test suite includes comprehensive coverage:
 
 - Contract deployment validation
-- Message sending and validation
-- Message length constraints
-- Empty message rejection
-- Message retrieval (all, by index, by sender, recent)
+- Pixel placement functionality
+- Coordinate validation
+- Pixel retrieval
 - Multiple user scenarios
 - Event emission verification
 
@@ -127,8 +117,8 @@ bun run test
 ## Deployment
 
 The deployment script automatically:
-1. Deploys the ChatRoom contract
-2. Copies the ABI to `../frontend/src/contracts/ChatRoomABI.json`
+1. Deploys the Megaplace contract
+2. Copies the ABI to `../frontend/src/contracts/MegaplaceABI.json`
 3. Updates the contract address in `../frontend/src/contracts/config.ts`
 4. Provides the verification command
 
@@ -162,24 +152,24 @@ Configuration is in `hardhat.config.ts`.
 
 ## Security Considerations
 
-- Messages are permanent and cannot be deleted
-- No access control - anyone can send messages
-- No profanity filtering or content moderation
+- Pixels are permanent and can be overwritten by anyone
+- No access control - anyone can place pixels
 - Consider rate limiting in production versions
 - Validate all inputs before calling contract functions
+- Canvas dimensions should be reasonable to avoid excessive gas costs
 
 ## Gas Optimization
 
 The contract uses:
-- Storage arrays for message history
+- Efficient storage for pixel data
 - Events for off-chain indexing
 - View functions for free reads
-- Efficient struct packing
+- Optimized struct packing for pixel data
 
 For production, consider:
-- Pagination limits
-- IPFS storage for large messages
-- Merkle tree verification for message history
+- Canvas size limits
+- Rate limiting per address
+- Cooldown periods between placements
 
 ## License
 
