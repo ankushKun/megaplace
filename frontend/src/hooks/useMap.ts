@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { usePublicClient } from 'wagmi';
 import { MEGAPLACE_ADDRESS } from '../contracts/config';
 import MegaplaceABI from '../contracts/MegaplaceABI.json';
@@ -17,6 +17,16 @@ interface UseMapState {
     hoveredPixel: { px: number; py: number } | null;
 }
 
+const CACHE_KEY = 'megaplace_pixels_cache';
+const CACHE_VERSION = 'v1';
+const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
+
+interface CachedData {
+    version: string;
+    timestamp: number;
+    pixels: Array<[string, number]>; // [key, color]
+}
+
 export function useMap() {
     const mapRef = useRef<LeafletMap | null>(null);
     const publicClient = usePublicClient();
@@ -26,6 +36,7 @@ export function useMap() {
     });
     const [isLoadingTiles, setIsLoadingTiles] = useState(false);
     const [placedPixelCount, setPlacedPixelCount] = useState(0);
+    const [isLoadingFromCache, setIsLoadingFromCache] = useState(true);
 
     // Store pixel colors in a map for efficient updates
     // Key: "px,py", Value: color
@@ -36,6 +47,67 @@ export function useMap() {
     const batchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const hoverHighlightRef = useRef<L.Rectangle | null>(null);
     const selectedHighlightRef = useRef<L.Rectangle | null>(null);
+
+    // Load from cache on mount
+    useEffect(() => {
+        try {
+            const cached = localStorage.getItem(CACHE_KEY);
+            if (cached) {
+                const data: CachedData = JSON.parse(cached);
+                const now = Date.now();
+
+                // Check if cache is valid
+                if (data.version === CACHE_VERSION && (now - data.timestamp) < CACHE_EXPIRY) {
+                    console.log(`Loading ${data.pixels.length} pixels from cache...`);
+
+                    // Restore pixels from cache
+                    data.pixels.forEach(([key, color]) => {
+                        pixelDataRef.current.set(key, color);
+
+                        // Create markers for cached pixels
+                        const [pxStr, pyStr] = key.split(',');
+                        const px = parseInt(pxStr, 10);
+                        const py = parseInt(pyStr, 10);
+                        if (!isNaN(px) && !isNaN(py)) {
+                            updateMarker(px, py, color);
+                        }
+                    });
+
+                    setPlacedPixelCount(pixelDataRef.current.size);
+                    console.log('Cache loaded successfully');
+                } else {
+                    console.log('Cache expired or invalid version, will fetch fresh data');
+                    localStorage.removeItem(CACHE_KEY);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load from cache:', error);
+            localStorage.removeItem(CACHE_KEY);
+        } finally {
+            setIsLoadingFromCache(false);
+        }
+    }, []);
+
+    // Save to cache whenever pixels change
+    useEffect(() => {
+        if (isLoadingFromCache) return; // Don't save while loading from cache
+
+        try {
+            const data: CachedData = {
+                version: CACHE_VERSION,
+                timestamp: Date.now(),
+                pixels: Array.from(pixelDataRef.current.entries()),
+            };
+            localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+            console.log(`Saved ${data.pixels.length} pixels to cache`);
+        } catch (error) {
+            console.error('Failed to save to cache:', error);
+            // If quota exceeded, clear old cache
+            if (error instanceof Error && error.name === 'QuotaExceededError') {
+                localStorage.removeItem(CACHE_KEY);
+            }
+        }
+    }, [placedPixelCount, isLoadingFromCache]);
 
     // Batch load multiple tiles in a single RPC call
     const loadTilesBatch = useCallback(
@@ -207,6 +279,12 @@ export function useMap() {
     const loadInitialTiles = useCallback(async () => {
         if (!publicClient || isLoadingTiles) return;
 
+        // Wait for cache to load first
+        if (isLoadingFromCache) {
+            console.log('Waiting for cache to load before fetching fresh data...');
+            return;
+        }
+
         setIsLoadingTiles(true);
 
         try {
@@ -223,7 +301,7 @@ export function useMap() {
         } finally {
             setIsLoadingTiles(false);
         }
-    }, [publicClient, isLoadingTiles, loadTilesBatch]);
+    }, [publicClient, isLoadingTiles, isLoadingFromCache, loadTilesBatch]);
 
     // Load visible tiles based on map bounds
     const loadVisibleTiles = useCallback(() => {

@@ -87,8 +87,12 @@ export default function App() {
   const [cooldownDisplay, setCooldownDisplay] = useState('');
   const [premiumTimeRemaining, setPremiumTimeRemaining] = useState('');
 
-  // Navigate to pixel from URL parameters on mount
+  // Navigate to pixel from URL parameters on mount, or choose a random placed pixel
+  const hasNavigatedRef = useRef(false);
+
   useEffect(() => {
+    if (hasNavigatedRef.current) return; // Only navigate once
+
     const params = new URLSearchParams(window.location.search);
     const pxParam = params.get('px');
     const pyParam = params.get('py');
@@ -101,10 +105,18 @@ export default function App() {
         // Wait a bit for map to initialize
         setTimeout(() => {
           focusOnPixel(px, py);
+          hasNavigatedRef.current = true;
         }, 500);
       }
+    } else if (recentPixels.length > 0) {
+      // Choose a random pixel from recent pixels
+      const randomPixel = recentPixels[Math.floor(Math.random() * recentPixels.length)];
+      setTimeout(() => {
+        focusOnPixel(Number(randomPixel.x), Number(randomPixel.y));
+        hasNavigatedRef.current = true;
+      }, 500);
     }
-  }, [focusOnPixel]);
+  }, [focusOnPixel, recentPixels]);
 
   // Update selected pixel highlight when color changes
   useEffect(() => {
@@ -189,23 +201,6 @@ export default function App() {
 
       // Store the pixel coordinates for the success toast
       setLastPlacedPixel({ px: selectedPixel.px, py: selectedPixel.py });
-
-      // Optimistically update the UI immediately
-      handlePixelPlaced({
-        user: account.address,
-        x: BigInt(selectedPixel.px),
-        y: BigInt(selectedPixel.py),
-        color: color,
-        timestamp: BigInt(Math.floor(Date.now() / 1000)),
-      });
-
-      // Zoom to the pixel to make it visible (if not already zoomed in enough)
-      if (mapRef.current) {
-        const currentZoom = mapRef.current.getZoom();
-        if (currentZoom < 18) {
-          focusOnPixel(selectedPixel.px, selectedPixel.py, 18);
-        }
-      }
 
       await placePixel(selectedPixel.px, selectedPixel.py, color);
     } catch (error) {
@@ -390,8 +385,7 @@ export default function App() {
               </div>
 
               {/* Custom Color Picker */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-white/60"> or custom</span>
+              <div className="flex items-center gap-0 flex-col relative top-2">
                 <input
                   type="color"
                   value={customColor}
@@ -401,6 +395,7 @@ export default function App() {
                   }}
                   className="w-10 h-10 cursor-pointer border-2 border-white/30 hover:border-white/50 transition-all shadow-lg backdrop-blur-sm"
                 />
+                <span className="text-xs text-white/60">custom</span>
               </div>
 
               {/* Divider */}
@@ -537,6 +532,8 @@ export default function App() {
         }}>
           Share selected
         </Button>
+        <div className='grow' />
+        <a href='https://docs.megaeth.com/faucet#timothy' className='underline underline-offset-3 text-center'>MegaETH Faucet</a>
       </div>
     </div>
   );
