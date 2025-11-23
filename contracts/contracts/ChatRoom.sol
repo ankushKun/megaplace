@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 /**
  * @title ChatRoom
  * @dev A simple on-chain chat room where anyone can send messages
+ * Supports session keys for gasless UX
  */
 contract ChatRoom {
     struct Message {
@@ -14,12 +15,60 @@ contract ChatRoom {
 
     Message[] private messages;
 
+    // Session key mapping: user address => session key address => expiry timestamp
+    mapping(address => mapping(address => uint256)) public sessionKeys;
+
     event MessageSent(
         address indexed sender,
         string content,
         uint256 timestamp,
         uint256 messageIndex
     );
+
+    event SessionKeyRegistered(
+        address indexed user,
+        address indexed sessionKey,
+        uint256 expiryTime
+    );
+
+    event SessionKeyRevoked(
+        address indexed user,
+        address indexed sessionKey
+    );
+
+    /**
+     * @dev Register a session key for the caller
+     * @param sessionKey The session key address
+     * @param duration How long the session key is valid (in seconds)
+     */
+    function registerSessionKey(address sessionKey, uint256 duration) public {
+        require(sessionKey != address(0), "ChatRoom: invalid session key");
+        require(duration > 0 && duration <= 30 days, "ChatRoom: invalid duration");
+
+        uint256 expiryTime = block.timestamp + duration;
+        sessionKeys[msg.sender][sessionKey] = expiryTime;
+
+        emit SessionKeyRegistered(msg.sender, sessionKey, expiryTime);
+    }
+
+    /**
+     * @dev Revoke a session key
+     * @param sessionKey The session key address to revoke
+     */
+    function revokeSessionKey(address sessionKey) public {
+        delete sessionKeys[msg.sender][sessionKey];
+        emit SessionKeyRevoked(msg.sender, sessionKey);
+    }
+
+    /**
+     * @dev Check if a session key is valid for a user
+     * @param user The user address
+     * @param sessionKey The session key address
+     */
+    function isValidSessionKey(address user, address sessionKey) public view returns (bool) {
+        uint256 expiryTime = sessionKeys[user][sessionKey];
+        return expiryTime > 0 && block.timestamp < expiryTime;
+    }
 
     /**
      * @dev Send a message to the chat room
@@ -39,6 +88,32 @@ contract ChatRoom {
 
         emit MessageSent(
             msg.sender,
+            content,
+            block.timestamp,
+            messages.length - 1
+        );
+    }
+
+    /**
+     * @dev Send a message on behalf of another user using a session key
+     * @param user The user address on whose behalf the message is sent
+     * @param content The message content
+     */
+    function sendMessageWithSessionKey(address user, string memory content) public {
+        require(isValidSessionKey(user, msg.sender), "ChatRoom: invalid or expired session key");
+        require(bytes(content).length > 0, "ChatRoom: message cannot be empty");
+        require(bytes(content).length <= 500, "ChatRoom: message too long");
+
+        Message memory newMessage = Message({
+            sender: user,
+            content: content,
+            timestamp: block.timestamp
+        });
+
+        messages.push(newMessage);
+
+        emit MessageSent(
+            user,
             content,
             block.timestamp,
             messages.length - 1

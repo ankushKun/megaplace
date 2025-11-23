@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 async function main() {
-  console.log("Deploying ChatRoom contract to MegaETH...");
+  console.log("Deploying Megaplace contract to MegaETH...");
 
   const [deployer] = await ethers.getSigners();
   console.log("Deploying contracts with account:", deployer.address);
@@ -15,21 +15,21 @@ async function main() {
   const network = await ethers.provider.getNetwork();
   console.log("Network:", network.name, "Chain ID:", network.chainId.toString());
 
-  const ChatRoom = await ethers.getContractFactory("ChatRoom");
+  const Megaplace = await ethers.getContractFactory("Megaplace");
 
   console.log("\nDeploying contract...");
 
   // Deploy with manual gas limit to bypass estimation
-  const chatRoom = await ChatRoom.deploy({
+  const megaplace = await Megaplace.deploy({
     gasLimit: 600000000  // 600M gas
   });
 
   console.log("Waiting for deployment...");
-  await chatRoom.waitForDeployment();
+  await megaplace.waitForDeployment();
 
-  const contractAddress = await chatRoom.getAddress();
-  console.log("\n✅ ChatRoom contract deployed to:", contractAddress);
-  console.log("Message count:", await chatRoom.getMessageCount());
+  const contractAddress = await megaplace.getAddress();
+  console.log("\n✅ Megaplace contract deployed to:", contractAddress);
+  console.log("Contract owner:", await megaplace.owner());
 
   // Update frontend configuration
   console.log("\nUpdating frontend configuration...");
@@ -42,9 +42,9 @@ async function main() {
 async function updateFrontendConfig(contractAddress: string) {
   try {
     // Paths
-    const artifactPath = path.join(__dirname, "../artifacts/contracts/ChatRoom.sol/ChatRoom.json");
+    const artifactPath = path.join(__dirname, "../artifacts/contracts/Megaplace.sol/Megaplace.json");
     const frontendContractsDir = path.join(__dirname, "../../frontend/src/contracts");
-    const abiOutputPath = path.join(frontendContractsDir, "ChatRoomABI.json");
+    const abiOutputPath = path.join(frontendContractsDir, "MegaplaceABI.json");
     const configPath = path.join(frontendContractsDir, "config.ts");
 
     // Read the artifact
@@ -60,7 +60,9 @@ async function updateFrontendConfig(contractAddress: string) {
     console.log("✅ ABI copied to:", abiOutputPath);
 
     // Update config file
-    const configContent = `export const CHATROOM_ADDRESS = "${contractAddress}" as const;
+    const configContent = `// Contract addresses
+export const MEGAPLACE_ADDRESS = "${contractAddress}" as const;
+export const CHATROOM_ADDRESS = "0x8D6a1b047BC7578A284b6f23394D0C1e579daCD2" as const;
 
 export const MEGAETH_CHAIN = {
   id: 6343,
@@ -74,9 +76,11 @@ export const MEGAETH_CHAIN = {
   rpcUrls: {
     default: {
       http: ["https://timothy.megaeth.com/rpc"],
+      webSocket: ["wss://timothy.megaeth.com/rpc"],
     },
     public: {
       http: ["https://timothy.megaeth.com/rpc"],
+      webSocket: ["wss://timothy.megaeth.com/rpc"],
     },
   },
   blockExplorers: {
