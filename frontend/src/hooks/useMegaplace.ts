@@ -4,6 +4,7 @@ import type { Abi } from 'viem';
 import { MEGAPLACE_ADDRESS } from '../contracts/config';
 import MegaplaceABI from '../contracts/MegaplaceABI.json';
 import { useEffect, useState, useRef } from 'react';
+import { toast } from 'sonner';
 
 // Type definitions
 export type Pixel = {
@@ -38,6 +39,13 @@ export function useCooldown() {
     query: {
       enabled: !!address,
       refetchInterval: 1000, // Refetch every second to update countdown
+      retry: (failureCount, error: any) => {
+        // Don't retry on rate limit errors
+        if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
+          return false;
+        }
+        return failureCount < 3;
+      },
     },
   });
 
@@ -64,6 +72,13 @@ export function usePremiumAccess() {
     query: {
       enabled: !!address,
       refetchInterval: 5000, // Refetch every 5 seconds
+      retry: (failureCount, error: any) => {
+        // Don't retry on rate limit errors
+        if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
+          return false;
+        }
+        return failureCount < 3;
+      },
     },
   });
 
@@ -84,13 +99,28 @@ export function usePlacePixel() {
   const { refetch: refetchCooldown } = useCooldown();
 
   const placePixel = (x: number, y: number, color: number) => {
-    // @ts-expect-error - wagmi provides chain and account from config
-    writeContract({
-      address: MEGAPLACE_ADDRESS,
-      abi: MegaplaceABI as Abi,
-      functionName: 'placePixel',
-      args: [BigInt(x), BigInt(y), color],
-    });
+    writeContract(
+      // @ts-expect-error - wagmi provides chain and account from config
+      {
+        address: MEGAPLACE_ADDRESS,
+        abi: MegaplaceABI as Abi,
+        functionName: 'placePixel',
+        args: [BigInt(x), BigInt(y), color],
+      },
+      {
+        onError: (error) => {
+          if (error.message.includes('rate limit') || error.message.includes('-32005')) {
+            toast.error('Rate Limited', {
+              description: 'Request is being rate limited. Please try again in a moment.',
+            });
+          } else {
+            toast.error('Failed to place pixel', {
+              description: error.message,
+            });
+          }
+        },
+      }
+    );
   };
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
@@ -120,13 +150,28 @@ export function useGrantPremiumAccess() {
   const { refetch: refetchPremium } = usePremiumAccess();
 
   const grantPremiumAccess = () => {
-    // @ts-expect-error - wagmi provides chain and account from config
-    writeContract({
-      address: MEGAPLACE_ADDRESS,
-      abi: MegaplaceABI as Abi,
-      functionName: 'grantPremiumAccess',
-      value: parseEther('0.01'),
-    });
+    writeContract(
+      // @ts-expect-error - wagmi provides chain and account from config
+      {
+        address: MEGAPLACE_ADDRESS,
+        abi: MegaplaceABI as Abi,
+        functionName: 'grantPremiumAccess',
+        value: parseEther('0.01'),
+      },
+      {
+        onError: (error) => {
+          if (error.message.includes('rate limit') || error.message.includes('-32005')) {
+            toast.error('Rate Limited', {
+              description: 'Request is being rate limited. Please try again in a moment.',
+            });
+          } else {
+            toast.error('Failed to purchase premium', {
+              description: error.message,
+            });
+          }
+        },
+      }
+    );
   };
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
@@ -236,17 +281,32 @@ export function usePlacePixelBatch() {
       throw new Error('Batch size must be 1-100');
     }
 
-    // @ts-expect-error - wagmi provides chain and account from config
-    writeContract({
-      address: MEGAPLACE_ADDRESS,
-      abi: MegaplaceABI as Abi,
-      functionName: 'placePixelBatch',
-      args: [
-        xCoords.map(x => BigInt(x)),
-        yCoords.map(y => BigInt(y)),
-        colors.map(c => c),
-      ],
-    });
+    writeContract(
+      // @ts-expect-error - wagmi provides chain and account from config
+      {
+        address: MEGAPLACE_ADDRESS,
+        abi: MegaplaceABI as Abi,
+        functionName: 'placePixelBatch',
+        args: [
+          xCoords.map(x => BigInt(x)),
+          yCoords.map(y => BigInt(y)),
+          colors.map(c => c),
+        ],
+      },
+      {
+        onError: (error) => {
+          if (error.message.includes('rate limit') || error.message.includes('-32005')) {
+            toast.error('Rate Limited', {
+              description: 'Request is being rate limited. Please try again in a moment.',
+            });
+          } else {
+            toast.error('Failed to place pixel batch', {
+              description: error.message,
+            });
+          }
+        },
+      }
+    );
   };
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
@@ -289,10 +349,10 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
       try {
         console.log('Loading recent pixel events...');
         const currentBlock = await publicClient.getBlockNumber();
-        const targetFromBlock = currentBlock > 100000n ? currentBlock - 100000n : 0n;
+        const targetFromBlock = currentBlock > 10000n ? currentBlock - 10000n : 0n;
 
-        // RPC has max block range of 100000, so we need to chunk if needed
-        const MAX_BLOCK_RANGE = 100000n;
+        // RPC has max block range of 10000, so we need to chunk if needed
+        const MAX_BLOCK_RANGE = 10000n;
         const allLogs: any[] = [];
 
         let fromBlock = targetFromBlock;
@@ -363,8 +423,13 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
         }
 
         console.log('Recent pixels loaded and displayed');
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error loading recent pixel events:', error);
+        if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
+          toast.error('Rate Limited', {
+            description: 'Unable to load recent pixels. The RPC is being rate limited.',
+          });
+        }
       }
     };
 
@@ -463,8 +528,13 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
 
           lastProcessedBlockRef.current = currentBlock;
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('[Event Watch] Error polling for events:', error);
+        if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
+          toast.error('Rate Limited', {
+            description: 'Event polling paused due to rate limiting.',
+          });
+        }
       }
     };
 

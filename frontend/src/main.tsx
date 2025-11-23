@@ -6,6 +6,7 @@ import { WagmiProvider } from 'wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { config } from './wagmi';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { Toaster } from 'sonner';
 import '@rainbow-me/rainbowkit/styles.css';
 
 const queryClient = new QueryClient();
@@ -16,6 +17,7 @@ createRoot(document.getElementById('root')!).render(
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider theme={darkTheme()}>
           <App />
+          <Toaster position="top-center" theme="dark" />
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
