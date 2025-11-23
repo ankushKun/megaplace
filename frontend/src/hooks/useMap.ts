@@ -129,7 +129,10 @@ export function useMap() {
 
     // Update or create a marker on the map
     const updateMarker = useCallback((px: number, py: number, color: number) => {
-        if (!mapRef.current) return;
+        if (!mapRef.current) {
+            console.warn(`Cannot update marker at (${px}, ${py}): mapRef not ready`);
+            return;
+        }
 
         const pixelKey = `${px},${py}`;
         const rgb = uint32ToRgb(color);
@@ -137,18 +140,18 @@ export function useMap() {
 
         let marker = markersRef.current.get(pixelKey);
         if (marker) {
+            console.log(`Updating existing marker at (${px}, ${py}) with color ${hexColor}`);
             marker.setStyle({ fillColor: hexColor, color: hexColor });
         } else {
+            console.log(`Creating new marker at (${px}, ${py}) with color ${hexColor}`);
             // Dynamically import Leaflet to create marker
             import('leaflet').then((L) => {
-                // Calculate exact pixel bounds - each pixel occupies 1/CANVAS_RES of the normalized space
-                // Convert pixel coordinates to normalized mercator space
-                const x1 = px / CANVAS_RES;
-                const y1 = py / CANVAS_RES;
-                const x2 = (px + 1) / CANVAS_RES;
-                const y2 = (py + 1) / CANVAS_RES;
+                if (!mapRef.current) {
+                    console.warn(`Map no longer available when creating marker at (${px}, ${py})`);
+                    return;
+                }
 
-                // Convert to lat/lon
+                // Calculate exact pixel bounds - each pixel occupies 1/CANVAS_RES of the normalized space
                 const { lat: lat1, lon: lon1 } = globalPxToLatLon(px, py);
                 const { lat: lat2, lon: lon2 } = globalPxToLatLon(px + 1, py + 1);
 
@@ -181,7 +184,12 @@ export function useMap() {
                 if (mapRef.current) {
                     newMarker.addTo(mapRef.current);
                     markersRef.current.set(pixelKey, newMarker);
+                    console.log(`Marker created and added to map at (${px}, ${py})`);
+                } else {
+                    console.warn(`Map ref lost while creating marker at (${px}, ${py})`);
                 }
+            }).catch(error => {
+                console.error(`Failed to import Leaflet for marker at (${px}, ${py}):`, error);
             });
         }
     }, []);
@@ -287,17 +295,21 @@ export function useMap() {
             const color = Number(event.color);
             const pixelKey = `${px},${py}`;
 
-            console.log(`Pixel placed at (${px}, ${py}) with color ${color}`);
+            console.log(`[handlePixelPlaced] Processing pixel at (${px}, ${py}) with color ${color} by ${event.user}`);
 
             if (color === 0) {
+                console.log(`[handlePixelPlaced] Removing pixel at (${px}, ${py})`);
                 pixelDataRef.current.delete(pixelKey);
                 removeMarker(pixelKey);
             } else {
+                console.log(`[handlePixelPlaced] Adding/updating pixel at (${px}, ${py})`);
                 pixelDataRef.current.set(pixelKey, color);
                 updateMarker(px, py, color);
             }
 
-            setPlacedPixelCount(pixelDataRef.current.size);
+            const newCount = pixelDataRef.current.size;
+            console.log(`[handlePixelPlaced] Total placed pixels: ${newCount}`);
+            setPlacedPixelCount(newCount);
         },
         [updateMarker, removeMarker]
     );

@@ -77,12 +77,13 @@ export default function App() {
   }, [loadVisibleTiles]);
   const { canPlace, cooldownRemaining, refetch: refetchCooldown } = useCooldown();
   const { hasAccess, expiryTime } = usePremiumAccess();
-  const { placePixel, isPending: isPlacingPixel } = usePlacePixel();
+  const { placePixel, isPending: isPlacingPixel, isConfirmed: isPixelPlaced, hash: pixelHash } = usePlacePixel();
   const { grantPremiumAccess, isPending: isPurchasingPremium } = useGrantPremiumAccess();
   const { recentPixels } = useWatchPixelPlaced(handlePixelPlaced);
 
   const [selectedColor, setSelectedColor] = useState('#000000');
   const [customColor, setCustomColor] = useState('#000000');
+  const [lastPlacedPixel, setLastPlacedPixel] = useState<{ px: number; py: number } | null>(null);
   const [cooldownDisplay, setCooldownDisplay] = useState('');
   const [premiumTimeRemaining, setPremiumTimeRemaining] = useState('');
 
@@ -169,14 +170,50 @@ export default function App() {
     }
   }, [hasAccess, expiryTime]);
 
+  // Show success toast when transaction is confirmed
+  useEffect(() => {
+    if (isPixelPlaced && lastPlacedPixel) {
+      toast.success('Pixel placed successfully!', {
+        description: `Placed at (${lastPlacedPixel.px}, ${lastPlacedPixel.py})`,
+      });
+      setLastPlacedPixel(null); // Reset to avoid showing toast again
+    }
+  }, [isPixelPlaced, lastPlacedPixel]);
+
   const handlePlacePixel = async () => {
     if (!selectedPixel || !account.address) return;
 
     try {
       const color = hexToUint32(selectedColor);
+      console.log(`Placing pixel at (${selectedPixel.px}, ${selectedPixel.py}) with color ${color}`);
+
+      // Store the pixel coordinates for the success toast
+      setLastPlacedPixel({ px: selectedPixel.px, py: selectedPixel.py });
+
+      // Optimistically update the UI immediately
+      handlePixelPlaced({
+        user: account.address,
+        x: BigInt(selectedPixel.px),
+        y: BigInt(selectedPixel.py),
+        color: color,
+        timestamp: BigInt(Math.floor(Date.now() / 1000)),
+      });
+
+      // Zoom to the pixel to make it visible (if not already zoomed in enough)
+      if (mapRef.current) {
+        const currentZoom = mapRef.current.getZoom();
+        if (currentZoom < 18) {
+          focusOnPixel(selectedPixel.px, selectedPixel.py, 18);
+        }
+      }
+
       await placePixel(selectedPixel.px, selectedPixel.py, color);
     } catch (error) {
       console.error('Failed to place pixel:', error);
+      setLastPlacedPixel(null); // Reset on error
+      toast.error('Failed to place pixel', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   };
 
@@ -376,7 +413,7 @@ export default function App() {
                 disabled={!selectedPixel || !account.address || !canPlace || isPlacingPixel}
                 className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-all disabled:pointer-events-none disabled:opacity-50 h-10 px-6 bg-linear-to-r from-white via-white to-white/95 hover:from-white hover:via-white/95 hover:to-white/90 text-black backdrop-blur-sm shadow-2xl shadow-white/20 border border-white/30"
               >
-                {isPlacingPixel ? 'Placing...' : 'Place Pixel'}
+                {isPlacingPixel ? 'Placing...' : canPlace ? 'Place Pixel' : `Wait ${cooldownDisplay}`}
               </button>
             </div>
 
