@@ -221,7 +221,7 @@ export default function App() {
       </div>
 
       {/* Canvas Area */}
-      <div className="grow relative bg-white">
+      <div className="grow relative">
         <canvas
           ref={canvasRef}
           id="mega-canvas"

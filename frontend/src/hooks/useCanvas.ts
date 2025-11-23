@@ -170,12 +170,20 @@ export function useCanvas() {
 
     const currentState = stateRef.current;
 
-    // Clear canvas with white background
-    ctx.fillStyle = '#ffffff';
+    // Clear canvas with gray background (area outside the pixel canvas)
+    ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Save context
     ctx.save();
+
+    // Apply transformations
+    ctx.translate(currentState.offsetX, currentState.offsetY);
+    ctx.scale(currentState.scale, currentState.scale);
+
+    // Draw white background for the actual pixel canvas area
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, CANVAS_SIZE * INITIAL_PIXEL_SIZE, CANVAS_SIZE * INITIAL_PIXEL_SIZE);
 
     // Calculate the visible region
     const pixelSize = INITIAL_PIXEL_SIZE * currentState.scale;
@@ -189,10 +197,6 @@ export function useCanvas() {
     const startY = Math.max(0, visibleStartY);
     const endX = Math.min(CANVAS_SIZE, visibleEndX);
     const endY = Math.min(CANVAS_SIZE, visibleEndY);
-
-    // Apply transformations
-    ctx.translate(currentState.offsetX, currentState.offsetY);
-    ctx.scale(currentState.scale, currentState.scale);
 
     // Draw grid (only if zoomed in enough)
     if (currentState.scale > 3) {
