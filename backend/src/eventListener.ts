@@ -236,18 +236,27 @@ export class EventListener {
                     const { args } = log;
                     if (args) {
                         const key = `${args.x},${args.y}`;
+                        const color = Number(args.color);
                         const pixelData: PixelData = {
                             x: Number(args.x),
                             y: Number(args.y),
-                            color: Number(args.color),
+                            color,
                             placedBy: args.user as string,
                             timestamp: Number(args.timestamp),
                         };
 
-                        if (!this.storage.pixels[key]) {
-                            this.storage.totalPixels++;
+                        // Color 0 means erase/transparent - remove the pixel from storage
+                        if (color === 0) {
+                            if (this.storage.pixels[key]) {
+                                delete this.storage.pixels[key];
+                                this.storage.totalPixels--;
+                            }
+                        } else {
+                            if (!this.storage.pixels[key]) {
+                                this.storage.totalPixels++;
+                            }
+                            this.storage.pixels[key] = pixelData;
                         }
-                        this.storage.pixels[key] = pixelData;
                         pixels.push(pixelData);
                     }
                 }
@@ -382,24 +391,32 @@ export class EventListener {
                     const { args } = log as any;
                     if (args) {
                         const key = `${args.x},${args.y}`;
+                        const color = Number(args.color);
                         const pixelData: PixelData = {
                             x: Number(args.x),
                             y: Number(args.y),
-                            color: Number(args.color),
+                            color,
                             placedBy: args.user as string,
                             timestamp: Number(args.timestamp),
                         };
 
-                        const isNewPixel = !this.storage.pixels[key];
-                        if (isNewPixel) {
-                            this.storage.totalPixels++;
+                        // Color 0 means erase/transparent - remove the pixel from storage
+                        if (color === 0) {
+                            if (this.storage.pixels[key]) {
+                                delete this.storage.pixels[key];
+                                this.storage.totalPixels--;
+                            }
+                            console.log(`🧹 Pixel erased at (${args.x}, ${args.y}) by ${(args.user as string).slice(0, 8)}...`);
+                        } else {
+                            const isNewPixel = !this.storage.pixels[key];
+                            if (isNewPixel) {
+                                this.storage.totalPixels++;
+                            }
+                            this.storage.pixels[key] = pixelData;
+                            console.log(`🎨 Pixel at (${args.x}, ${args.y}) by ${(args.user as string).slice(0, 8)}...`);
                         }
 
-                        this.storage.pixels[key] = pixelData;
-
-                        console.log(`🎨 Pixel at (${args.x}, ${args.y}) by ${(args.user as string).slice(0, 8)}...`);
-
-                        // Notify SSE clients
+                        // Notify SSE clients (they need to know about erases too)
                         this.notifyPixel(pixelData);
 
                         this.saveStorage();

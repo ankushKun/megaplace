@@ -796,13 +796,15 @@ export function uint32ToHex(color: number | bigint): string {
 }
 
 // Utility function to convert hex string to uint32
+// Note: Black (#000000) is converted to 0x010101 to distinguish from transparent (0)
 export function hexToUint32(hex: string): number {
   const cleaned = hex.replace('#', '');
   const r = parseInt(cleaned.substring(0, 2), 16) || 0;
   const g = parseInt(cleaned.substring(2, 4), 16) || 0;
   const b = parseInt(cleaned.substring(4, 6), 16) || 0;
-  // Ensure we return a number, not a BigInt
-  return Number(rgbToUint32(r, g, b));
+  const color = Number(rgbToUint32(r, g, b));
+  // Convert black (0) to near-black (0x010101) since 0 means transparent/unset
+  return color === 0 ? 0x010101 : color;
 }
 
 // Admin Hooks (owner-only functions)

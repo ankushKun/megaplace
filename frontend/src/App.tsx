@@ -29,7 +29,7 @@ import {
   DEFAULT_COOLDOWN_PIXELS,
   PIXEL_SELECT_ZOOM,
 } from './constants';
-import { latLonToGlobalPx } from './lib/projection';
+import { latLonToGlobalPx, globalPxToLatLon } from './lib/projection';
 
 // Icons as inline SVGs for cleaner look
 const PaintBrushIcon = () => (
@@ -218,6 +218,8 @@ export default function App() {
     needsFunding,
     fundSessionKey,
     getSessionWalletClient,
+    needsSignature,
+    generateFromSignature,
   } = useSessionKey();
 
   // Use session key for cooldown tracking
@@ -231,7 +233,7 @@ export default function App() {
   const { recentPixels } = useWatchPixelPlaced(handlePixelPlaced);
 
   // Check if session key is ready for instant placement
-  const canInstantPlace = account.address && sessionAddress && !needsFunding;
+  const canInstantPlace = account.address && sessionAddress && !needsFunding && !needsSignature;
 
   const allPixels = useMemo(() => {
     // Merge and dedupe by position (x,y) - keep the one with latest timestamp
@@ -329,12 +331,8 @@ export default function App() {
     if (!account.address || !canInstantPlace) return;
 
     const isTransparent = selectedColor === TRANSPARENT_COLOR;
-    // Convert color: transparent = 0 (unset), black (#000000) = 0x010101, others as-is
-    let color = isTransparent ? 0 : hexToUint32(selectedColor);
-    // Frontend converts black (0) to near-black (0x010101) to distinguish from unset
-    if (color === 0 && !isTransparent) {
-      color = 0x010101;
-    }
+    // Transparent = 0 (unset), all other colors go through hexToUint32 (which converts black to 0x010101)
+    const color = isTransparent ? 0 : hexToUint32(selectedColor);
 
     // Optimistic update - show immediately on map
     if (isTransparent) {
@@ -445,8 +443,39 @@ export default function App() {
         </button>
         <button
           onClick={() => {
-            if (allPixels.length > 0) {
-              const randomPixel = allPixels[Math.floor(Math.random() * allPixels.length)];
+            if (allPixels.length > 0 && mapRef.current) {
+              // Get current visible bounds
+              const bounds = mapRef.current.getBounds();
+              const center = mapRef.current.getCenter();
+
+              // Filter pixels that are NOT in the current view
+              const notVisiblePixels = allPixels.filter(pixel => {
+                const { lat, lon } = globalPxToLatLon(Number(pixel.x), Number(pixel.y));
+                return !bounds.contains([lat, lon]);
+              });
+
+              // If we have pixels outside the view, prefer those
+              // Otherwise fall back to any pixel that's at least some distance away
+              let targetPixels = notVisiblePixels;
+
+              if (targetPixels.length === 0) {
+                // All pixels are visible - find ones that are at least somewhat away from center
+                const minDistance = 0.01; // Minimum lat/lon distance
+                targetPixels = allPixels.filter(pixel => {
+                  const { lat, lon } = globalPxToLatLon(Number(pixel.x), Number(pixel.y));
+                  const distance = Math.sqrt(
+                    Math.pow(lat - center.lat, 2) + Math.pow(lon - center.lng, 2)
+                  );
+                  return distance > minDistance;
+                });
+              }
+
+              // If still no candidates, just use all pixels
+              if (targetPixels.length === 0) {
+                targetPixels = allPixels;
+              }
+
+              const randomPixel = targetPixels[Math.floor(Math.random() * targetPixels.length)];
               focusOnPixel(Number(randomPixel.x), Number(randomPixel.y));
             }
           }}
@@ -589,28 +618,42 @@ export default function App() {
             <button onClick={() => setShowRecentPixels(false)} className="text-slate-400 hover:text-slate-600">✕</button>
           </div>
           <div className="overflow-y-auto max-h-80">
-            {allPixels.slice(0, 20).map((pixel) => (
-              <div
-                key={`${pixel.x}-${pixel.y}-${pixel.timestamp}`}
-                className="p-3 hover:bg-slate-50 cursor-pointer transition-colors flex items-center gap-3 border-b border-slate-100 last:border-0"
-                onClick={() => {
-                  focusOnPixel(Number(pixel.x), Number(pixel.y));
-                }}
-              >
+            {allPixels.slice(0, 20).map((pixel) => {
+              const isTransparent = pixel.color === 0;
+              return (
                 <div
-                  className="w-8 h-8 rounded-lg shadow-inner border border-slate-200"
-                  style={{ backgroundColor: uint32ToHex(pixel.color) }}
-                />
-                <div>
-                  <div className="text-sm font-medium text-slate-700">
-                    ({Number(pixel.x)}, {Number(pixel.y)})
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    {pixel.user.slice(0, 6)}...{pixel.user.slice(-4)}
+                  key={`${pixel.x}-${pixel.y}-${pixel.timestamp}`}
+                  className="p-3 hover:bg-slate-50 cursor-pointer transition-colors flex items-center gap-3 border-b border-slate-100 last:border-0"
+                  onClick={() => {
+                    focusOnPixel(Number(pixel.x), Number(pixel.y));
+                  }}
+                >
+                  <div
+                    className="w-8 h-8 rounded-lg shadow-inner border border-slate-200"
+                    style={isTransparent ? {
+                      backgroundImage: `
+                        linear-gradient(45deg, #ccc 25%, transparent 25%),
+                        linear-gradient(-45deg, #ccc 25%, transparent 25%),
+                        linear-gradient(45deg, transparent 75%, #ccc 75%),
+                        linear-gradient(-45deg, transparent 75%, #ccc 75%)
+                      `,
+                      backgroundSize: '8px 8px',
+                      backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0px',
+                      backgroundColor: '#fff'
+                    } : { backgroundColor: uint32ToHex(pixel.color) }}
+                  />
+                  <div>
+                    <div className="text-sm font-medium text-slate-700">
+                      ({Number(pixel.x)}, {Number(pixel.y)})
+                      {isTransparent && <span className="text-slate-400 ml-1 text-xs">(erased)</span>}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {pixel.user.slice(0, 6)}...{pixel.user.slice(-4)}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -725,12 +768,12 @@ export default function App() {
             {/* Paint Button with Cooldown */}
             <div className="px-4 pb-4">
               <button
-                onClick={needsFunding ? fundSessionKey : handlePlacePixel}
-                disabled={!account.address || (!needsFunding && !selectedPixel) || isFunding}
+                onClick={needsSignature ? generateFromSignature : needsFunding ? fundSessionKey : handlePlacePixel}
+                disabled={!account.address || (!needsSignature && !needsFunding && !selectedPixel) || isFunding}
                 className="w-full relative overflow-hidden bg-blue-500 hover:bg-blue-600 disabled:bg-slate-300 text-white font-semibold py-3 px-6 rounded-xl transition-all disabled:cursor-not-allowed shadow-lg hover:shadow-xl active:scale-[0.99]"
               >
                 {/* Cooldown/Pixels progress bar */}
-                {!hasAccess && (
+                {!hasAccess && !needsSignature && !needsFunding && (
                   <div
                     className="absolute inset-0 bg-blue-600 transition-all duration-300"
                     style={{ width: `${cooldownProgress}%` }}
@@ -740,6 +783,8 @@ export default function App() {
                 <div className="relative flex items-center justify-center gap-3">
                   {isFunding ? (
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : needsSignature ? (
+                    <KeyIcon />
                   ) : needsFunding ? (
                     <WalletIcon />
                   ) : (
@@ -750,15 +795,17 @@ export default function App() {
                       ? 'Connect Wallet'
                       : isFunding
                         ? 'Funding...'
-                        : needsFunding
-                          ? 'Fund Session Key'
-                          : !selectedPixel
-                            ? 'Select a pixel'
-                            : pendingCount > 0
-                              ? `Painting (${pendingCount})...`
-                              : queueLength > 0
-                                ? `Paint (${queueLength} queued)`
-                                : 'Paint'
+                        : needsSignature
+                          ? 'Sign to Create Session Key'
+                          : needsFunding
+                            ? 'Fund Session Key'
+                            : !selectedPixel
+                              ? 'Select a pixel'
+                              : pendingCount > 0
+                                ? `Painting (${pendingCount})...`
+                                : queueLength > 0
+                                  ? `Paint (${queueLength} queued)`
+                                  : 'Paint'
                     }
                   </span>
                   {account.address && selectedPixel && !needsFunding && (
@@ -772,7 +819,9 @@ export default function App() {
 
               {/* Help text */}
               <div className="mt-2 text-center text-xs text-slate-400">
-                {needsFunding ? (
+                {needsSignature ? (
+                  <span className="text-blue-500">Sign to create your deterministic session key</span>
+                ) : needsFunding ? (
                   <span className="text-amber-500">Fund session key to paint instantly</span>
                 ) : currentZoom >= PIXEL_SELECT_ZOOM ? (
                   <>

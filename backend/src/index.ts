@@ -19,13 +19,13 @@ async function main() {
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
             console.log('Endpoints:');
             console.log(`  GET  /health                    - Health check & stats`);
-            console.log(`  GET  /api/stats                 - Sync stats`);
-            console.log(`  GET  /api/pixels                - All pixels (JSON, paginated)`);
-            console.log(`  GET  /api/pixels?limit=N&offset=M`);
-            console.log(`  GET  /api/pixels/binary         - All pixels (binary, 12 bytes/pixel)`);
-            console.log(`  GET  /api/pixels/stream         - SSE real-time pixel updates`);
-            console.log(`  GET  /api/pixels/:x/:y          - Single pixel`);
-            console.log(`  GET  /api/pixels/region/...     - Region of pixels`);
+            console.log(`  GET  /stats                     - Sync stats`);
+            console.log(`  GET  /pixels                    - All pixels (JSON, paginated)`);
+            console.log(`  GET  /pixels?limit=N&offset=M   - Paginated pixels`);
+            console.log(`  GET  /pixels/binary             - All pixels (binary, 12 bytes/pixel)`);
+            console.log(`  GET  /pixels/stream             - SSE real-time pixel updates`);
+            console.log(`  GET  /pixels/:x/:y              - Single pixel`);
+            console.log(`  GET  /pixels/region/:x/:y/:w/:h - Region of pixels`);
             console.log();
         });
 
