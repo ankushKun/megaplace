@@ -1,8 +1,5 @@
 // Contract addresses
-export const MEGAPLACE_ADDRESS = "0xF7bB0ba31c14ff85c582f2b6F45355abe01dCB07" as const;
-
-// Contract deployment block - update this to the actual deployment block
-export const MEGAPLACE_DEPLOYMENT_BLOCK = 4211820n; // TODO: Update with actual deployment block
+export const MEGAPLACE_ADDRESS = "0x51746EB62f5eC6478676Cf44B6A5a22E44B42125" as const;
 
 export const MEGAETH_CHAIN = {
   id: 6343,
@@ -31,3 +28,5 @@ export const MEGAETH_CHAIN = {
   },
   testnet: true,
 } as const;
+
+export const megaethChain = MEGAETH_CHAIN;

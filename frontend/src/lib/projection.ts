@@ -1,15 +1,14 @@
 // Web Mercator projection utilities for global pixel canvas
+import { CANVAS_RES, TILE_SIZE, MAX_LATITUDE } from '../constants';
 
-// Constants
-export const MAX_LAT = 85.05112878; // Maximum latitude for Web Mercator
-export const CANVAS_RES = 1048576; // 2^20 - matches smart contract
-export const TILE_SIZE = 512; // Standard tile size - matches smart contract
+// Re-export constants for backwards compatibility
+export { CANVAS_RES, TILE_SIZE, MAX_LATITUDE as MAX_LAT };
 
 /**
  * Clamp latitude to valid Web Mercator range
  */
 export function clampLat(lat: number): number {
-    return Math.max(Math.min(lat, MAX_LAT), -MAX_LAT);
+    return Math.max(Math.min(lat, MAX_LATITUDE), -MAX_LATITUDE);
 }
 
 /**

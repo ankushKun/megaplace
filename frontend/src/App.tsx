@@ -1,36 +1,94 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount } from 'wagmi';
 import { useRef, useCallback, useState, useEffect, useMemo } from 'react';
-import { Button } from './components/ui/button';
 import { useMap } from './hooks/useMap';
 import {
   useCooldown,
   usePremiumAccess,
-  usePlacePixel,
+  usePlacePixelWithSessionKey,
   useGrantPremiumAccess,
   useWatchPixelPlaced,
   hexToUint32,
   uint32ToHex
 } from './hooks/useMegaplace';
+import { useSessionKey } from './hooks/useSessionKey';
 import { MapContainer, TileLayer, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { Map as LeafletMap } from 'leaflet';
 import { toast } from 'sonner';
+import {
+  PRESET_COLORS,
+  DEFAULT_MAP_CENTER,
+  DEFAULT_MAP_ZOOM,
+  MIN_MAP_ZOOM,
+  MAX_MAP_ZOOM,
+  MAP_MOVE_THROTTLE_MS,
+  DEFAULT_PREMIUM_COST_ETH,
+  DEFAULT_COOLDOWN_SECONDS,
+  DEFAULT_COOLDOWN_PIXELS,
+  PIXEL_SELECT_ZOOM,
+} from './constants';
+import { latLonToGlobalPx } from './lib/projection';
 
-const PRESET_COLORS = [
-  '#000000', // Black
-  '#FF0000', // Red
-  '#00FF00', // Green
-  '#0000FF', // Blue
-  '#FFFF00', // Yellow
-  '#FF00FF', // Magenta
-  '#00FFFF', // Cyan
-  '#FFFFFF', // White
-  '#FFA500', // Orange
-  '#800080', // Purple
-  '#FFC0CB', // Pink
-  '#A52A2A', // Brown
-];
+// Icons as inline SVGs for cleaner look
+const PaintBrushIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08" />
+    <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z" />
+  </svg>
+);
+
+const GridIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect width="7" height="7" x="3" y="3" rx="1" />
+    <rect width="7" height="7" x="14" y="3" rx="1" />
+    <rect width="7" height="7" x="14" y="14" rx="1" />
+    <rect width="7" height="7" x="3" y="14" rx="1" />
+  </svg>
+);
+
+const ShareIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+    <polyline points="16,6 12,2 8,6" />
+    <line x1="12" x2="12" y1="2" y2="15" />
+  </svg>
+);
+
+const ZapIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+  </svg>
+);
+
+const ChevronIcon = ({ direction = 'down' }: { direction?: 'up' | 'down' }) => (
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={`transition-transform ${direction === 'up' ? 'rotate-180' : ''}`}
+  >
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+const KeyIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4" />
+  </svg>
+);
+
+const WalletIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" />
+    <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
+  </svg>
+);
 
 // Component to handle map events
 function MapEventsHandler({ onMapClick, onMapReady, onMoveEnd, onZoomEnd, onMouseMove, onMouseOut }: {
@@ -68,40 +126,93 @@ function MapEventsHandler({ onMapClick, onMapReady, onMoveEnd, onZoomEnd, onMous
 
 export default function App() {
   const account = useAccount();
-  const { mapRef, selectedPixel, hoveredPixel, handlePixelPlaced, placedPixelCount, focusOnPixel, loadVisibleTiles, handleMapClick, handleMapHover, handleMapHoverOut, loadInitialTiles, getSelectedPixelColor, updateSelectedHighlightColor, isLoadingFromBackend, initializeMap, backendPixels } = useMap();
+  const {
+    mapRef,
+    selectedPixel,
+    hoveredPixel,
+    handlePixelPlaced,
+    placedPixelCount,
+    focusOnPixel,
+    loadVisibleTiles,
+    handleMapClick,
+    handleMapHover,
+    handleMapHoverOut,
+    loadInitialTiles,
+    updateSelectedHighlightColor,
+    isLoadingFromBackend,
+    initializeMap,
+    backendPixels,
+    updateMarker,
+    removeMarker,
+  } = useMap();
 
-  // Throttle map movement to prevent RPC spam
   const lastMoveTimeRef = useRef<number>(0);
   const throttledLoadVisibleTiles = useCallback(() => {
     const now = Date.now();
-    if (now - lastMoveTimeRef.current < 500) return; // Throttle to max once per 500ms
+    if (now - lastMoveTimeRef.current < MAP_MOVE_THROTTLE_MS) return;
     lastMoveTimeRef.current = now;
     loadVisibleTiles();
   }, [loadVisibleTiles]);
-  const { canPlace, cooldownRemaining, refetch: refetchCooldown } = useCooldown();
-  const { hasAccess, expiryTime } = usePremiumAccess();
-  const { placePixel, isPending: isPlacingPixel, isConfirmed: isPixelPlaced, hash: pixelHash } = usePlacePixel();
+
+  // Session key for instant transactions
+  const {
+    sessionAddress,
+    sessionBalance,
+    sessionBalanceFormatted,
+    isLoading: isSessionKeyLoading,
+    isFunding,
+    needsFunding,
+    fundSessionKey,
+    getSessionWalletClient,
+  } = useSessionKey();
+
+  // Use session key for cooldown tracking
+  const { canPlace, cooldownRemaining, pixelsRemaining, refetch: refetchCooldown } = useCooldown(sessionAddress ?? undefined);
+  const { hasAccess } = usePremiumAccess();
+  const { placePixel, pendingCount, recentHashes } = usePlacePixelWithSessionKey(
+    getSessionWalletClient,
+    sessionAddress ?? undefined
+  );
   const { grantPremiumAccess, isPending: isPurchasingPremium } = useGrantPremiumAccess();
   const { recentPixels } = useWatchPixelPlaced(handlePixelPlaced);
 
-  // Combine backend pixels and live pixels, sorted by timestamp (most recent first)
+  // Check if session key is ready for instant placement
+  const canInstantPlace = account.address && sessionAddress && !needsFunding;
+
   const allPixels = useMemo(() => {
     return [...backendPixels, ...recentPixels]
       .sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
   }, [backendPixels, recentPixels]);
 
-  const [selectedColor, setSelectedColor] = useState('#000000');
-  const [customColor, setCustomColor] = useState('#000000');
-  const [lastPlacedPixel, setLastPlacedPixel] = useState<{ px: number; py: number } | null>(null);
-  const [cooldownDisplay, setCooldownDisplay] = useState('');
-  const [premiumTimeRemaining, setPremiumTimeRemaining] = useState('');
+  const [selectedColor, setSelectedColor] = useState<string>(PRESET_COLORS[0]);
+  const [showRecentPixels, setShowRecentPixels] = useState(true);
+  const [isToolbarExpanded, setIsToolbarExpanded] = useState(true);
 
-  // Navigate to pixel from URL parameters on mount, or choose a random placed pixel
   const hasNavigatedRef = useRef(false);
 
-  useEffect(() => {
-    if (hasNavigatedRef.current) return; // Only navigate once
+  // Track current zoom level for instant placement
+  const [currentZoom, setCurrentZoom] = useState(DEFAULT_MAP_ZOOM);
 
+  // Calculate cooldown progress - now based on pixels remaining
+  const cooldownProgress = useMemo(() => {
+    if (hasAccess) return 100;
+    if (!canPlace) {
+      // In cooldown - show time progress
+      const remaining = Number(cooldownRemaining);
+      return Math.max(0, ((DEFAULT_COOLDOWN_SECONDS - remaining) / DEFAULT_COOLDOWN_SECONDS) * 100);
+    }
+    // Not in cooldown - show pixels remaining
+    return (Number(pixelsRemaining) / DEFAULT_COOLDOWN_PIXELS) * 100;
+  }, [canPlace, cooldownRemaining, pixelsRemaining, hasAccess]);
+
+  const cooldownDisplay = useMemo(() => {
+    if (hasAccess) return '⚡';
+    if (!canPlace) return `${Number(cooldownRemaining)}s`;
+    return `${Number(pixelsRemaining)}/${DEFAULT_COOLDOWN_PIXELS}`;
+  }, [canPlace, cooldownRemaining, pixelsRemaining, hasAccess]);
+
+  useEffect(() => {
+    if (hasNavigatedRef.current) return;
     const params = new URLSearchParams(window.location.search);
     const pxParam = params.get('px');
     const pyParam = params.get('py');
@@ -109,46 +220,27 @@ export default function App() {
     if (pxParam && pyParam) {
       const px = parseInt(pxParam, 10);
       const py = parseInt(pyParam, 10);
-
       if (!isNaN(px) && !isNaN(py)) {
-        // Wait a bit for map to initialize
         setTimeout(() => {
           focusOnPixel(px, py);
           hasNavigatedRef.current = true;
         }, 500);
       }
     } else if (allPixels.length > 0) {
-      // Choose a random pixel from recent pixels
       const randomPixel = allPixels[Math.floor(Math.random() * allPixels.length)];
       setTimeout(() => {
         focusOnPixel(Number(randomPixel.x), Number(randomPixel.y));
         hasNavigatedRef.current = true;
       }, 500);
     }
-  }, [focusOnPixel, recentPixels]);
+  }, [focusOnPixel, allPixels]);
 
-  // Update selected pixel highlight when color changes
   useEffect(() => {
     if (selectedPixel) {
       updateSelectedHighlightColor(selectedColor);
     }
   }, [selectedColor, selectedPixel, updateSelectedHighlightColor]);
 
-  // Update cooldown display every second
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (cooldownRemaining > 0n) {
-        const seconds = Number(cooldownRemaining);
-        setCooldownDisplay(`${seconds}s`);
-      } else {
-        setCooldownDisplay('Ready!');
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [cooldownRemaining]);
-
-  // Refetch cooldown when it expires
   useEffect(() => {
     if (cooldownRemaining > 0n) {
       const timeout = setTimeout(() => {
@@ -158,408 +250,414 @@ export default function App() {
     }
   }, [cooldownRemaining, refetchCooldown]);
 
-  // Update premium time remaining display every second
+  // Fire and forget pixel placement - no waiting, allows spam clicking
+  const handlePlacePixelAt = useCallback((px: number, py: number) => {
+    if (!account.address || !canInstantPlace) return;
+
+    const color = hexToUint32(selectedColor);
+    // Optimistic update - show immediately
+    updateMarker(px, py, color);
+    // Fire and forget - don't await
+    placePixel(px, py, color);
+    // Refetch cooldown
+    refetchCooldown();
+  }, [account.address, canInstantPlace, selectedColor, placePixel, updateMarker, refetchCooldown]);
+
+  const handlePlacePixel = useCallback(() => {
+    if (!selectedPixel) return;
+    handlePlacePixelAt(selectedPixel.px, selectedPixel.py);
+  }, [selectedPixel, handlePlacePixelAt]);
+
+  // Instant place on map click when zoomed in and session key ready
+  const handleInstantMapClick = useCallback((lat: number, lng: number) => {
+    const { px, py } = latLonToGlobalPx(lat, lng);
+
+    // Check if we should instant place or just select
+    const isZoomedIn = currentZoom >= PIXEL_SELECT_ZOOM;
+
+    if (isZoomedIn && canInstantPlace && canPlace) {
+      // Instant place!
+      handlePlacePixelAt(px, py);
+    }
+
+    // Always update selection (handleMapClick handles this)
+    handleMapClick(lat, lng, selectedColor);
+  }, [currentZoom, canInstantPlace, canPlace, handlePlacePixelAt, handleMapClick, selectedColor]);
+
+  // Keyboard shortcuts - fire and forget allows rapid pressing
   useEffect(() => {
-    const updatePremiumDisplay = () => {
-      if (hasAccess && expiryTime > 0n) {
-        const now = Math.floor(Date.now() / 1000);
-        const expiry = Number(expiryTime);
-        const remaining = expiry - now;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-        if (remaining > 0) {
-          const hours = Math.floor(remaining / 3600);
-          const minutes = Math.floor((remaining % 3600) / 60);
-          const seconds = remaining % 60;
-
-          if (hours > 0) {
-            setPremiumTimeRemaining(`${hours}h ${minutes}m ${seconds}s remaining`);
-          } else if (minutes > 0) {
-            setPremiumTimeRemaining(`${minutes}m ${seconds}s remaining`);
-          } else {
-            setPremiumTimeRemaining(`${seconds}s remaining`);
-          }
-        } else {
-          setPremiumTimeRemaining('Expired');
-        }
+      if (e.key === 'Enter' && selectedPixel && account.address && canInstantPlace) {
+        e.preventDefault();
+        handlePlacePixel();
       }
     };
 
-    if (hasAccess) {
-      updatePremiumDisplay();
-      const interval = setInterval(updatePremiumDisplay, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [hasAccess, expiryTime]);
-
-  // Show success toast when transaction is confirmed
-  useEffect(() => {
-    if (isPixelPlaced && lastPlacedPixel) {
-      toast.success('Pixel placed successfully!', {
-        description: `Placed at (${lastPlacedPixel.px}, ${lastPlacedPixel.py})`,
-      });
-      setLastPlacedPixel(null); // Reset to avoid showing toast again
-    }
-  }, [isPixelPlaced, lastPlacedPixel]);
-
-  const handlePlacePixel = async () => {
-    if (!selectedPixel || !account.address) return;
-
-    try {
-      const color = hexToUint32(selectedColor);
-      console.log(`Placing pixel at (${selectedPixel.px}, ${selectedPixel.py}) with color ${color}`);
-
-      // Store the pixel coordinates for the success toast
-      setLastPlacedPixel({ px: selectedPixel.px, py: selectedPixel.py });
-
-      await placePixel(selectedPixel.px, selectedPixel.py, color);
-    } catch (error) {
-      console.error('Failed to place pixel:', error);
-      setLastPlacedPixel(null); // Reset on error
-      toast.error('Failed to place pixel', {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  };
-
-  const handlePurchasePremium = async () => {
-    try {
-      await grantPremiumAccess();
-    } catch (error) {
-      console.error('Failed to purchase premium:', error);
-    }
-  };
-
-  const formatTime = (timestamp: bigint) => {
-    const date = new Date(Number(timestamp) * 1000);
-    return date.toLocaleTimeString();
-  };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedPixel, account.address, canInstantPlace, handlePlacePixel]);
 
   return (
-    <div className='flex h-screen overflow-hidden bg-linear-to-br from-black via-zinc-950 to-black'>
-      {/* Left Sidebar */}
-      <div className="w-80 border-r border-white/10 flex flex-col bg-white/3 backdrop-blur-sm">
-        <div className="p-4 border-b border-white/10 bg-linear-to-b from-white/5 to-transparent">
-          <h2 className="text-xl font-bold text-white mb-4 tracking-wide">MegaPlace</h2>
+    <div className="h-screen w-screen overflow-hidden bg-slate-900 relative">
+      {/* Full-screen Map */}
+      <MapContainer
+        center={DEFAULT_MAP_CENTER}
+        zoom={DEFAULT_MAP_ZOOM}
+        minZoom={MIN_MAP_ZOOM}
+        maxZoom={MAX_MAP_ZOOM}
+        className="w-full h-full"
+        zoomControl={false}
+        worldCopyJump={false}
+        maxBounds={[[-90, -180], [90, 180]]}
+        maxBoundsViscosity={1.0}
+        attributionControl={false}
+        scrollWheelZoom={true}
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          noWrap={true}
+        />
+        <MapEventsHandler
+          onMapClick={handleInstantMapClick}
+          onMapReady={(map) => {
+            initializeMap(map);
+            loadInitialTiles();
+            setCurrentZoom(map.getZoom());
+          }}
+          onMoveEnd={throttledLoadVisibleTiles}
+          onZoomEnd={() => {
+            throttledLoadVisibleTiles();
+            if (mapRef.current) {
+              setCurrentZoom(mapRef.current.getZoom());
+            }
+          }}
+          onMouseMove={(lat, lng) => handleMapHover(lat, lng, selectedColor)}
+          onMouseOut={handleMapHoverOut}
+        />
+      </MapContainer>
 
-          {/* Cooldown Timer */}
-          <div className="bg-linear-to-br from-white/15 to-white/5 backdrop-blur-sm rounded-2xl p-4 mb-4 border border-white/20 shadow-2xl shadow-black/50">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm text-white/70">Cooldown</span>
-              <span className={`text-lg font-bold ${canPlace ? 'text-white' : 'text-white/50'}`}>
-                {cooldownDisplay}
-              </span>
-            </div>
-            {!hasAccess && (
-              <div className="text-xs text-white/50">
-                15s cooldown between pixels
-              </div>
-            )}
-          </div>
-
-          {/* Premium Access */}
-          <div className="bg-linear-to-br from-white/15 to-white/5 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-2xl shadow-black/50">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-semibold text-white">Premium</span>
-              {hasAccess && (
-                <span className="text-xs bg-linear-to-r from-white/30 to-white/20 px-3 py-1 rounded-full backdrop-blur-sm border border-white/30 shadow-lg">Active</span>
-              )}
-            </div>
-            {hasAccess ? (
-              <div className="space-y-1">
-                <div className="text-xs text-white/70">
-                  No cooldown!
-                </div>
-                <div className="text-sm font-mono text-white">
-                  {premiumTimeRemaining}
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="text-xs text-white/70 mb-2">
-                  No cooldown for 2 hours
-                </div>
-                <button
-                  type="button"
-                  onClick={handlePurchasePremium}
-                  disabled={!account.address || isPurchasingPremium}
-                  className="w-full inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 h-9 px-4 py-2 bg-linear-to-r from-white/95 to-white/90 hover:from-white hover:to-white/95 text-black backdrop-blur-sm shadow-xl shadow-white/10 border border-white/20"
-                >
-                  {isPurchasingPremium ? 'Purchasing...' : 'Buy for 0.01 ETH'}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Recent Pixels */}
-        <div className="flex-1 overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-white/10">
-            <h3 className="text-sm font-semibold text-white/90">Recent Pixels</h3>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {isLoadingFromBackend && allPixels.length === 0 ? (
-              <div className="divide-y divide-white/10">
-                {[...Array(8)].map((_, index) => (
-                  <div key={index} className="p-3 animate-pulse">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-white/10" />
-                      <div className="flex-1 space-y-2">
-                        <div className="h-3 bg-white/10 rounded w-24" />
-                        <div className="h-3 bg-white/10 rounded w-20" />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : allPixels.length === 0 ? (
-              <div className="p-4 text-center text-white/30 text-sm">
-                No pixels placed recently.
-              </div>
-            ) : (
-              <div className="divide-y divide-white/10">
-                {allPixels.map((pixel, index) => (
-                  <div
-                    key={index}
-                    className="p-3 hover:bg-white/8 transition-all duration-200 cursor-pointer backdrop-blur-sm"
-                    onClick={() => focusOnPixel(Number(pixel.x), Number(pixel.y))}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-8 h-8 rounded-lg border border-white/30 shadow-xl backdrop-blur-sm"
-                        style={{ backgroundColor: uint32ToHex(pixel.color) }}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-white/60">
-                          ({Number(pixel.x)}, {Number(pixel.y)})
-                        </div>
-                        <div className="text-xs text-white/40 truncate">
-                          {pixel.user.slice(0, 6)}...{pixel.user.slice(-4)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-      {/* End of Left Sidebar */}
-
-      {/* Map Area */}
-      <div className="grow relative">
-        <MapContainer
-          center={[37.757, -122.4376]}
-          zoom={7}
-          minZoom={3}
-          maxZoom={18}
-          className="w-full h-full cursor-default"
-          zoomControl={true}
-          worldCopyJump={false}
-          maxBounds={[[-90, -180], [90, 180]]}
-          maxBoundsViscosity={1.0}
-          attributionControl={false}
-          scrollWheelZoom={true}
-          easeLinearity={0.25}
+      {/* Top Left - Zoom Controls */}
+      <div className="absolute top-4 left-4 flex flex-col gap-2 z-1000">
+        <button
+          onClick={() => mapRef.current?.zoomIn()}
+          className="w-8 h-8 bg-white rounded-lg shadow-lg flex items-center justify-center text-slate-700 hover:bg-slate-50 transition-colors font-bold text-lg"
         >
-          <TileLayer
-            attribution='<a href="https://www.openstreetmap.org">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            noWrap={true}
-          />
-          <MapEventsHandler
-            onMapClick={(lat, lng) => handleMapClick(lat, lng, selectedColor)}
-            onMapReady={(map) => {
-              initializeMap(map);
-              loadInitialTiles();
-            }}
-            onMoveEnd={throttledLoadVisibleTiles}
-            onZoomEnd={throttledLoadVisibleTiles}
-            onMouseMove={(lat, lng) => handleMapHover(lat, lng, selectedColor)}
-            onMouseOut={handleMapHoverOut}
-          />
-        </MapContainer>
+          +
+        </button>
+        <button
+          onClick={() => mapRef.current?.zoomOut()}
+          className="w-8 h-8 bg-white rounded-lg shadow-lg flex items-center justify-center text-slate-700 hover:bg-slate-50 transition-colors font-bold text-lg"
+        >
+          −
+        </button>
+      </div>
 
-        {/* Position Display - Top Right */}
+      {/* Top Right - Wallet & Info */}
+      <div className="absolute top-4 right-4 flex items-center gap-3 z-1000">
+        {/* Coordinates Display */}
         {hoveredPixel && (
-          <div className="absolute top-4 right-4 bg-linear-to-br from-black/70 to-black/50 backdrop-blur-sm text-white px-4 py-2 rounded-2xl text-sm border border-white/30 shadow-2xl shadow-black/50">
-            <div className="font-mono">
-              <span className="text-white/70">X:</span> <span className="text-white font-semibold">{hoveredPixel.px}</span>
-              <span className="text-white/40 mx-2">|</span>
-              <span className="text-white/70">Y:</span> <span className="text-white font-semibold">{hoveredPixel.py}</span>
-            </div>
+          <div className="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg shadow-lg text-sm font-mono text-slate-700">
+            {hoveredPixel.px}, {hoveredPixel.py}
           </div>
         )}
 
-        {/* Color Picker and Place Button */}
-        <div className='absolute bottom-0 left-0 right-0 p-4 flex items-center justify-center'>
-          <div className='bg-linear-to-t from-black/80 via-black/70 to-black/60 backdrop-blur-sm rounded-3xl p-5 shadow-2xl border border-white/30 max-w-4xl w-full'>
-            <div className="flex items-center gap-4">
-              {/* Preset Colors */}
-              <div className="flex gap-2 flex-wrap">
-                {PRESET_COLORS.map((color) => (
-                  <button
-                    key={color}
-                    onClick={() => setSelectedColor(color)}
-                    className={`w-10 h-10 border-2 transition-all hover:scale-110 backdrop-blur-sm ${selectedColor === color ? 'border-white shadow-2xl shadow-white/30 ring-2 ring-white/20 ring-offset-2 ring-offset-black/50' : 'border-white/30 hover:border-white/50'
-                      }`}
-                    style={{ backgroundColor: color }}
-                    title={color}
-                  />
-                ))}
-              </div>
-
-              {/* Custom Color Picker */}
-              <div className="flex items-center gap-0 flex-col relative top-2">
-                <input
-                  type="color"
-                  value={customColor}
-                  onChange={(e) => {
-                    setCustomColor(e.target.value);
-                    setSelectedColor(e.target.value);
-                  }}
-                  className="w-10 h-10 cursor-pointer border-2 border-white/30 hover:border-white/50 transition-all shadow-lg backdrop-blur-sm"
-                />
-                <span className="text-xs text-white/60">custom</span>
-              </div>
-
-              {/* Divider */}
-              <div className="h-10 w-px bg-white/20" />
-
-              {/* Place Button */}
+        {/* Session Key Status */}
+        {account.address && sessionAddress && (
+          <div className="bg-white/90 backdrop-blur-sm rounded-lg shadow-lg text-sm font-medium text-slate-700 flex items-center overflow-hidden">
+            <div className="px-3 py-1.5 flex items-center gap-2 border-r border-slate-200">
+              <KeyIcon />
+              <span className="text-xs font-mono">{sessionAddress.slice(0, 6)}...{sessionAddress.slice(-4)}</span>
+            </div>
+            {needsFunding ? (
               <button
-                type="button"
-                onClick={handlePlacePixel}
-                disabled={!selectedPixel || !account.address || !canPlace || isPlacingPixel}
-                className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-all disabled:pointer-events-none disabled:opacity-50 h-10 px-6 bg-linear-to-r from-white via-white to-white/95 hover:from-white hover:via-white/95 hover:to-white/90 text-black backdrop-blur-sm shadow-2xl shadow-white/20 border border-white/30"
+                onClick={fundSessionKey}
+                disabled={isFunding}
+                className="px-3 py-1.5 bg-amber-500 text-white hover:bg-amber-600 transition-colors flex items-center gap-1.5 disabled:opacity-50"
               >
-                {isPlacingPixel ? 'Placing...' : canPlace ? 'Place Pixel' : `Wait ${cooldownDisplay}`}
+                {isFunding ? (
+                  <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <WalletIcon />
+                )}
+                <span>Fund</span>
               </button>
-            </div>
-
-            {/* Help Text */}
-            <div className="text-xs text-white/40 mt-3 text-center">
-              Click anywhere on the map to select a location, zoom and pan to explore
-            </div>
+            ) : (
+              <div className="px-3 py-1.5 text-emerald-600 flex items-center gap-1">
+                <span>{parseFloat(sessionBalanceFormatted).toFixed(4)}</span>
+                <span className="text-slate-400">ETH</span>
+              </div>
+            )}
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* Right Sidebar */}
-      <div className="w-64 bg-white/3 backdrop-blur-sm border-l border-white/10 p-4 flex flex-col gap-4">
-        {/* Connect Button */}
+        {/* Pixels Count - Toggle for Recent Pixels */}
+        <button
+          onClick={() => setShowRecentPixels(!showRecentPixels)}
+          className={`backdrop-blur-sm px-3 py-1.5 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 transition-colors ${showRecentPixels
+            ? 'bg-blue-500 text-white hover:bg-blue-600'
+            : 'bg-white/90 text-slate-700 hover:bg-white'
+            }`}
+          title="Toggle recent pixels"
+        >
+          <GridIcon />
+          <span>{placedPixelCount.toLocaleString()}</span>
+        </button>
+
+        {/* Wallet Connect */}
         <ConnectButton.Custom>
           {({ account: walletAccount, chain, openAccountModal, openChainModal, openConnectModal, mounted }) => {
             const ready = mounted;
             const connected = ready && walletAccount && chain;
 
             return (
-              <div
-                {...(!ready && {
-                  'aria-hidden': true,
-                  style: {
-                    opacity: 0,
-                    pointerEvents: 'none',
-                    userSelect: 'none',
-                  },
-                })}
-              >
-                {(() => {
-                  if (!connected) {
-                    return (
-                      <button
-                        type="button"
-                        onClick={openConnectModal}
-                        className="w-full inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 h-9 px-4 py-2 bg-linear-to-r from-white/95 to-white/90 hover:from-white hover:to-white/95 text-black backdrop-blur-sm shadow-xl shadow-white/10 border border-white/30"
-                      >
-                        Connect Wallet
-                      </button>
-                    );
-                  }
-
-                  if (chain.unsupported) {
-                    return (
-                      <button
-                        type="button"
-                        onClick={openChainModal}
-                        className="w-full inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 h-9 px-4 py-2 bg-linear-to-r from-white/20 to-white/15 hover:from-white/30 hover:to-white/25 text-white backdrop-blur-sm border border-white/30 shadow-xl shadow-black/50"
-                      >
-                        Wrong network
-                      </button>
-                    );
-                  }
-
-                  return (
-                    <button
-                      type="button"
-                      onClick={openAccountModal}
-                      className="w-full inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 h-9 px-4 py-2 border bg-linear-to-r from-white/12 to-white/8 hover:from-white/18 hover:to-white/12 text-white border-white/30 backdrop-blur-sm shadow-lg"
-                    >
-                      {walletAccount.address.slice(0, 6)}...{walletAccount.address.slice(-4)}
-                    </button>
-                  );
-                })()}
+              <div {...(!ready && { 'aria-hidden': true, style: { opacity: 0, pointerEvents: 'none' } })}>
+                {!connected ? (
+                  <button
+                    onClick={openConnectModal}
+                    className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-1.5 rounded-lg shadow-lg font-medium text-sm transition-colors"
+                  >
+                    Connect
+                  </button>
+                ) : chain.unsupported ? (
+                  <button
+                    onClick={openChainModal}
+                    className="bg-red-500 hover:bg-red-600 text-white px-4 py-1.5 rounded-lg shadow-lg font-medium text-sm transition-colors"
+                  >
+                    Wrong Network
+                  </button>
+                ) : (
+                  <button
+                    onClick={openAccountModal}
+                    className="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg shadow-lg text-sm font-medium text-slate-700 hover:bg-white transition-colors"
+                  >
+                    {walletAccount.address.slice(0, 6)}...{walletAccount.address.slice(-4)}
+                  </button>
+                )}
               </div>
             );
           }}
         </ConnectButton.Custom>
+      </div>
 
-        {/* Instructions */}
-        <div className="bg-linear-to-br from-white/15 to-white/5 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-2xl shadow-black/50">
-          <h3 className="text-sm font-semibold text-white mb-3">How to Play</h3>
-          <ul className="text-xs text-white/70 space-y-2">
-            <li className="flex items-center gap-2">
-              <span className="text-white/40">1.</span>
-              <span>Click a pixel on the canvas</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="text-white/40">2.</span>
-              <span>Choose a color</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="text-white/40">3.</span>
-              <span>Place your pixel!</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="text-white/40">4.</span>
-              <span>Wait 15s or buy premium</span>
-            </li>
-          </ul>
+      {/* Transaction Status - Show pending count for fire-and-forget */}
+      {pendingCount > 0 && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-1000">
+          <div className="bg-white/95 backdrop-blur-sm px-4 py-2 rounded-xl shadow-lg text-sm font-medium text-slate-700 flex items-center gap-2">
+            <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <span>Sending {pendingCount} tx{pendingCount > 1 ? 's' : ''}...</span>
+            {recentHashes[0] && (
+              <a
+                href={`https://megaexplorer.xyz/tx/${recentHashes[0]}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-500 hover:text-blue-600 text-xs"
+              >
+                View
+              </a>
+            )}
+          </div>
         </div>
+      )}
 
-        {/* Stats */}
-        <div className="bg-linear-to-br from-white/15 to-white/5 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-2xl shadow-black/50">
-          <h3 className="text-sm font-semibold text-white mb-3">Canvas Stats</h3>
-          <div className="text-xs text-white/70 space-y-2">
-            <div className="flex justify-between">
-              <span className="text-white/50">Size</span>
-              <span className="font-mono">1,048,576 × 1,048,576</span>
+      {/* Recent Pixels Panel */}
+      {showRecentPixels && (
+        <div className="absolute top-16 right-4 w-72 bg-white/95 backdrop-blur-sm rounded-xl shadow-2xl z-1000 max-h-96 overflow-hidden">
+          <div className="p-3 border-b border-slate-200 font-semibold text-slate-700 flex items-center justify-between">
+            <span>Recent Pixels</span>
+            <button onClick={() => setShowRecentPixels(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+          </div>
+          <div className="overflow-y-auto max-h-80">
+            {allPixels.slice(0, 20).map((pixel) => (
+              <div
+                key={`${pixel.x}-${pixel.y}-${pixel.timestamp}`}
+                className="p-3 hover:bg-slate-50 cursor-pointer transition-colors flex items-center gap-3 border-b border-slate-100 last:border-0"
+                onClick={() => {
+                  focusOnPixel(Number(pixel.x), Number(pixel.y));
+                  setShowRecentPixels(false);
+                }}
+              >
+                <div
+                  className="w-8 h-8 rounded-lg shadow-inner border border-slate-200"
+                  style={{ backgroundColor: uint32ToHex(pixel.color) }}
+                />
+                <div>
+                  <div className="text-sm font-medium text-slate-700">
+                    ({Number(pixel.x)}, {Number(pixel.y)})
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {pixel.user.slice(0, 6)}...{pixel.user.slice(-4)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Bottom Toolbar */}
+      <div className="absolute bottom-0 left-0 right-0 z-1000 p-4">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white rounded-2xl shadow-2xl overflow-hidden">
+            {/* Toolbar Header */}
+            <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setIsToolbarExpanded(!isToolbarExpanded)}
+                  className="flex items-center gap-2 text-slate-600 hover:text-slate-800 transition-colors"
+                >
+                  <ChevronIcon direction={isToolbarExpanded ? 'down' : 'up'} />
+                </button>
+                <div className="flex items-center gap-2 text-slate-700 font-medium">
+                  <PaintBrushIcon />
+                  <span>Paint pixel</span>
+                  {selectedPixel && (
+                    <span className="text-slate-400 text-sm">
+                      ({selectedPixel.px}, {selectedPixel.py})
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Share Button */}
+                <button
+                  onClick={() => {
+                    if (!selectedPixel) {
+                      toast.error('Select a pixel first');
+                      return;
+                    }
+                    const shareUrl = `${window.location.origin}?px=${selectedPixel.px}&py=${selectedPixel.py}`;
+                    navigator.clipboard.writeText(shareUrl);
+                    toast.success('Link copied!');
+                  }}
+                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                  title="Share location"
+                >
+                  <ShareIcon />
+                </button>
+
+                {/* Premium Button */}
+                {!hasAccess && account.address && (
+                  <button
+                    onClick={() => grantPremiumAccess()}
+                    disabled={isPurchasingPremium}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-linear-to-r from-amber-400 to-orange-500 text-white rounded-lg font-medium text-sm hover:from-amber-500 hover:to-orange-600 transition-all shadow-sm disabled:opacity-50"
+                    title={`No cooldown for 2h - ${DEFAULT_PREMIUM_COST_ETH} ETH`}
+                  >
+                    <ZapIcon />
+                    <span className="hidden sm:inline">Boost</span>
+                  </button>
+                )}
+                {hasAccess && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-linear-to-r from-amber-400 to-orange-500 text-white rounded-lg font-medium text-sm">
+                    <ZapIcon />
+                    <span className="hidden sm:inline">Boosted</span>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-white/50">Total Pixels</span>
-              <span className="font-mono">~1.1 trillion</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-white/50">Pixels Placed</span>
-              <span className="font-mono">{placedPixelCount.toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-white/50">Network</span>
-              <span>MegaETH</span>
+
+            {/* Color Palette */}
+            {isToolbarExpanded && (
+              <div className="p-4">
+                {/* Two rows of 19 colors each */}
+                <div className="grid grid-cols-19 gap-1.5 mb-4">
+                  {PRESET_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      onClick={() => setSelectedColor(color)}
+                      className={`aspect-square ring ring-black/50 rounded-lg transition-all hover:scale-110 relative ${selectedColor === color
+                        ? 'ring-2 ring-offset-2 ring-blue-500 scale-110 z-10'
+                        : 'hover:ring-2 hover:ring-slate-300'
+                        }`}
+                      style={{ backgroundColor: color }}
+                      title={color}
+                    >
+                      {/* Selection checkmark */}
+                      {selectedColor === color && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className={`w-3 h-3 rounded-full ${['#FFFFFF', '#C0C0C0', '#FFF8B8', '#7EED56', '#51E9F4', '#94B3FF', '#E4ABFF', '#FF99AA', '#FFB470', '#D4D7D9', '#FFCC99'].includes(color)
+                            ? 'bg-slate-800'
+                            : 'bg-white'
+                            }`} />
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Paint Button with Cooldown */}
+            <div className="px-4 pb-4">
+              <button
+                onClick={handlePlacePixel}
+                disabled={!selectedPixel || !account.address || needsFunding}
+                className="w-full relative overflow-hidden bg-blue-500 hover:bg-blue-600 disabled:bg-slate-300 text-white font-semibold py-3 px-6 rounded-xl transition-all disabled:cursor-not-allowed shadow-lg hover:shadow-xl active:scale-[0.99]"
+              >
+                {/* Cooldown/Pixels progress bar */}
+                {!hasAccess && (
+                  <div
+                    className="absolute inset-0 bg-blue-600 transition-all duration-300"
+                    style={{ width: `${cooldownProgress}%` }}
+                  />
+                )}
+
+                <div className="relative flex items-center justify-center gap-3">
+                  <PaintBrushIcon />
+                  <span>
+                    {!account.address
+                      ? 'Connect Wallet'
+                      : needsFunding
+                        ? 'Fund Session Key'
+                        : !selectedPixel
+                          ? 'Select a pixel'
+                          : pendingCount > 0
+                            ? `Painting (${pendingCount})...`
+                            : 'Paint'
+                    }
+                  </span>
+                  {account.address && selectedPixel && !needsFunding && (
+                    <span className={`px-2 py-0.5 rounded-full text-sm ${canPlace || hasAccess ? 'bg-white/20' : 'bg-white/10'
+                      }`}>
+                      {cooldownDisplay}
+                    </span>
+                  )}
+                </div>
+              </button>
+
+              {/* Help text */}
+              <div className="mt-2 text-center text-xs text-slate-400">
+                {needsFunding ? (
+                  <span className="text-amber-500">Fund session key to paint instantly</span>
+                ) : currentZoom >= PIXEL_SELECT_ZOOM ? (
+                  <>
+                    <span className="text-emerald-500">Click to paint instantly!</span>
+                    {hasAccess && <span className="text-amber-500 ml-2">⚡ No cooldown!</span>}
+                  </>
+                ) : (
+                  <>
+                    Zoom in to paint on click • {DEFAULT_COOLDOWN_PIXELS} pixels per {DEFAULT_COOLDOWN_SECONDS}s
+                    {hasAccess && <span className="text-amber-500 ml-2">⚡ No cooldown!</span>}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
-        <Button disabled={!selectedPixel} onClick={() => {
-          if (!selectedPixel) return;
-          const shareUrl = `${window.location.origin}?px=${selectedPixel.px}&py=${selectedPixel.py}`;
-          navigator.clipboard.writeText(shareUrl);
-          toast.success('Shareable link copied to clipboard!');
-        }}>
-          Share selected
-        </Button>
-        <div className='grow' />
-        <a href='https://docs.megaeth.com/faucet#timothy' className='underline underline-offset-3 text-center'>MegaETH Faucet</a>
       </div>
+
+      {/* Faucet Link - Bottom Left */}
+      <a
+        href="https://docs.megaeth.com/faucet#timothy"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="absolute bottom-4 left-4 z-1000 text-white/60 hover:text-white/90 text-xs transition-colors"
+      >
+        Get testnet ETH →
+      </a>
     </div>
   );
 }

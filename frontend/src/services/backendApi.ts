@@ -1,5 +1,7 @@
 // Backend API service for fetching pixel data
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+import { DEFAULT_BACKEND_URL, BACKEND_HEALTH_TIMEOUT_MS } from '../constants';
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || DEFAULT_BACKEND_URL;
 
 export interface BackendPixelData {
     x: number;
@@ -122,7 +124,7 @@ export async function checkBackendHealth(): Promise<boolean> {
     try {
         const response = await fetch(`${BACKEND_URL}/health`, {
             method: 'GET',
-            signal: AbortSignal.timeout(3000), // 3 second timeout
+            signal: AbortSignal.timeout(BACKEND_HEALTH_TIMEOUT_MS),
         });
         return response.ok;
     } catch (error) {

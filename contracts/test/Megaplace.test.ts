@@ -6,6 +6,7 @@ import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 // Constants matching the contract
 const CANVAS_RES = 1048576; // 2^20
 const TILE_SIZE = 512;
+const MAX_REGION_SIZE = 10000;
 
 // Helper functions for time manipulation
 async function getCurrentTime(): Promise<number> {
@@ -47,6 +48,33 @@ describe("Megaplace", function () {
 
       expect(await ethers.provider.getBalance(await megaplace.getAddress())).to.equal(amount);
     });
+
+    it("Should have correct default configuration", async function () {
+      const [rateLimitSeconds, premiumCost, premiumDuration] = await megaplace.getConfig();
+      expect(rateLimitSeconds).to.equal(15);
+      expect(premiumCost).to.equal(ethers.parseEther("0.01"));
+      expect(premiumDuration).to.equal(2 * 60 * 60); // 2 hours
+    });
+  });
+
+  describe("Ownership Transfer (Ownable2Step)", function () {
+    it("Should allow owner to initiate ownership transfer", async function () {
+      await megaplace.connect(owner).transferOwnership(user1.address);
+      expect(await megaplace.pendingOwner()).to.equal(user1.address);
+      expect(await megaplace.owner()).to.equal(owner.address); // Still owner until accepted
+    });
+
+    it("Should allow pending owner to accept ownership", async function () {
+      await megaplace.connect(owner).transferOwnership(user1.address);
+      await megaplace.connect(user1).acceptOwnership();
+      expect(await megaplace.owner()).to.equal(user1.address);
+    });
+
+    it("Should reject non-pending owner accepting ownership", async function () {
+      await megaplace.connect(owner).transferOwnership(user1.address);
+      await expect(megaplace.connect(user2).acceptOwnership())
+        .to.be.revertedWithCustomError(megaplace, "OwnableUnauthorizedAccount");
+    });
   });
 
   describe("placePixel", function () {
@@ -69,18 +97,20 @@ describe("Megaplace", function () {
 
     it("Should reject invalid x coordinate (>= CANVAS_RES)", async function () {
       await expect(megaplace.connect(user1).placePixel(CANVAS_RES, 0, 0xff0000))
-        .to.be.revertedWith("Megaplace: invalid coordinates");
+        .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates")
+        .withArgs(CANVAS_RES, 0);
 
       await expect(megaplace.connect(user1).placePixel(CANVAS_RES + 1, 0, 0xff0000))
-        .to.be.revertedWith("Megaplace: invalid coordinates");
+        .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
     });
 
     it("Should reject invalid y coordinate (>= CANVAS_RES)", async function () {
       await expect(megaplace.connect(user1).placePixel(0, CANVAS_RES, 0xff0000))
-        .to.be.revertedWith("Megaplace: invalid coordinates");
+        .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates")
+        .withArgs(0, CANVAS_RES);
 
       await expect(megaplace.connect(user1).placePixel(0, CANVAS_RES + 1, 0xff0000))
-        .to.be.revertedWith("Megaplace: invalid coordinates");
+        .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
     });
 
     it("Should enforce 15-second rate limit for regular users", async function () {
@@ -88,14 +118,14 @@ describe("Megaplace", function () {
 
       // Try to place another pixel immediately
       await expect(megaplace.connect(user1).placePixel(1, 1, 0x00ff00))
-        .to.be.revertedWith("Megaplace: rate limit exceeded");
+        .to.be.revertedWithCustomError(megaplace, "RateLimitExceeded");
 
       // Advance time by 10 seconds (still too early)
       await increaseTime(10);
 
       // Still should fail because only 10 seconds have passed
       await expect(megaplace.connect(user1).placePixel(1, 1, 0x00ff00))
-        .to.be.revertedWith("Megaplace: rate limit exceeded");
+        .to.be.revertedWithCustomError(megaplace, "RateLimitExceeded");
 
       // Advance time by 5 more seconds (total 15 seconds)
       await increaseTime(5);
@@ -209,17 +239,18 @@ describe("Megaplace", function () {
     it("Should reject array length mismatch", async function () {
       await expect(
         megaplace.connect(user1).placePixelBatch([0, 1], [0], [0xff0000, 0x00ff00])
-      ).to.be.revertedWith("Megaplace: array length mismatch");
+      ).to.be.revertedWithCustomError(megaplace, "ArrayLengthMismatch");
 
       await expect(
         megaplace.connect(user1).placePixelBatch([0], [0, 1], [0xff0000])
-      ).to.be.revertedWith("Megaplace: array length mismatch");
+      ).to.be.revertedWithCustomError(megaplace, "ArrayLengthMismatch");
     });
 
     it("Should reject empty batch", async function () {
       await expect(
         megaplace.connect(user1).placePixelBatch([], [], [])
-      ).to.be.revertedWith("Megaplace: batch size must be 1-100");
+      ).to.be.revertedWithCustomError(megaplace, "InvalidBatchSize")
+        .withArgs(0, 1, 100);
     });
 
     it("Should reject batch larger than 100 pixels", async function () {
@@ -229,17 +260,18 @@ describe("Megaplace", function () {
 
       await expect(
         megaplace.connect(user1).placePixelBatch(x, y, colors)
-      ).to.be.revertedWith("Megaplace: batch size must be 1-100");
+      ).to.be.revertedWithCustomError(megaplace, "InvalidBatchSize")
+        .withArgs(101, 1, 100);
     });
 
     it("Should reject batch with invalid coordinates", async function () {
       await expect(
         megaplace.connect(user1).placePixelBatch([CANVAS_RES], [0], [0xff0000])
-      ).to.be.revertedWith("Megaplace: invalid coordinates");
+      ).to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
 
       await expect(
         megaplace.connect(user1).placePixelBatch([0, 1, CANVAS_RES], [0, 1, 0], [0xff0000, 0x00ff00, 0x0000ff])
-      ).to.be.revertedWith("Megaplace: invalid coordinates");
+      ).to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
     });
 
     it("Should enforce rate limit for batch placement", async function () {
@@ -252,7 +284,7 @@ describe("Megaplace", function () {
       // Try to place another batch immediately
       await expect(
         megaplace.connect(user1).placePixelBatch([2], [2], [0x0000ff])
-      ).to.be.revertedWith("Megaplace: rate limit exceeded");
+      ).to.be.revertedWithCustomError(megaplace, "RateLimitExceeded");
 
       // Advance time by 15 seconds
       await increaseTime(15);
@@ -305,18 +337,24 @@ describe("Megaplace", function () {
       expect(expiryTime).to.equal(expectedExpiry);
     });
 
+    it("Should emit PremiumAccessGranted event", async function () {
+      await expect(megaplace.connect(user1).grantPremiumAccess({ value: ethers.parseEther("0.01") }))
+        .to.emit(megaplace, "PremiumAccessGranted");
+    });
+
     it("Should reject incorrect payment amount", async function () {
       await expect(
         megaplace.connect(user1).grantPremiumAccess({ value: ethers.parseEther("0.005") })
-      ).to.be.revertedWith("Megaplace: incorrect payment amount");
+      ).to.be.revertedWithCustomError(megaplace, "IncorrectPaymentAmount")
+        .withArgs(ethers.parseEther("0.005"), ethers.parseEther("0.01"));
 
       await expect(
         megaplace.connect(user1).grantPremiumAccess({ value: ethers.parseEther("0.02") })
-      ).to.be.revertedWith("Megaplace: incorrect payment amount");
+      ).to.be.revertedWithCustomError(megaplace, "IncorrectPaymentAmount");
 
       await expect(
         megaplace.connect(user1).grantPremiumAccess({ value: 0 })
-      ).to.be.revertedWith("Megaplace: incorrect payment amount");
+      ).to.be.revertedWithCustomError(megaplace, "IncorrectPaymentAmount");
     });
 
     it("Should expire premium access after 2 hours", async function () {
@@ -343,7 +381,7 @@ describe("Megaplace", function () {
     it("Should reject non-owner calling adminGrantPremiumAccess", async function () {
       await expect(
         megaplace.connect(user1).adminGrantPremiumAccess(user2.address)
-      ).to.be.revertedWith("Ownable: caller is not the owner");
+      ).to.be.revertedWithCustomError(megaplace, "OwnableUnauthorizedAccount");
     });
 
     it("Should allow owner to grant premium access to multiple users", async function () {
@@ -361,7 +399,7 @@ describe("Megaplace", function () {
     it("Should reject non-owner calling adminGrantPremiumAccessBatch", async function () {
       await expect(
         megaplace.connect(user1).adminGrantPremiumAccessBatch([user2.address, user3.address])
-      ).to.be.revertedWith("Ownable: caller is not the owner");
+      ).to.be.revertedWithCustomError(megaplace, "OwnableUnauthorizedAccount");
     });
 
     it("Should add premium payment to contract balance", async function () {
@@ -371,6 +409,74 @@ describe("Megaplace", function () {
 
       const finalBalance = await ethers.provider.getBalance(await megaplace.getAddress());
       expect(finalBalance - initialBalance).to.equal(ethers.parseEther("0.01"));
+    });
+  });
+
+  describe("Configuration Management", function () {
+    it("Should allow owner to update rate limit", async function () {
+      await expect(megaplace.connect(owner).setRateLimit(30))
+        .to.emit(megaplace, "RateLimitUpdated")
+        .withArgs(15, 30);
+
+      expect(await megaplace.rateLimitSeconds()).to.equal(30);
+    });
+
+    it("Should allow owner to update premium cost", async function () {
+      const newCost = ethers.parseEther("0.05");
+      await expect(megaplace.connect(owner).setPremiumCost(newCost))
+        .to.emit(megaplace, "PremiumCostUpdated")
+        .withArgs(ethers.parseEther("0.01"), newCost);
+
+      expect(await megaplace.premiumCost()).to.equal(newCost);
+    });
+
+    it("Should allow owner to update premium duration", async function () {
+      const newDuration = 4 * 60 * 60; // 4 hours
+      await expect(megaplace.connect(owner).setPremiumDuration(newDuration))
+        .to.emit(megaplace, "PremiumDurationUpdated")
+        .withArgs(2 * 60 * 60, newDuration);
+
+      expect(await megaplace.premiumDuration()).to.equal(newDuration);
+    });
+
+    it("Should reject non-owner updating configuration", async function () {
+      await expect(megaplace.connect(user1).setRateLimit(30))
+        .to.be.revertedWithCustomError(megaplace, "OwnableUnauthorizedAccount");
+
+      await expect(megaplace.connect(user1).setPremiumCost(ethers.parseEther("0.05")))
+        .to.be.revertedWithCustomError(megaplace, "OwnableUnauthorizedAccount");
+
+      await expect(megaplace.connect(user1).setPremiumDuration(4 * 60 * 60))
+        .to.be.revertedWithCustomError(megaplace, "OwnableUnauthorizedAccount");
+    });
+
+    it("Should use updated rate limit for new placements", async function () {
+      // Set rate limit to 5 seconds
+      await megaplace.connect(owner).setRateLimit(5);
+
+      await megaplace.connect(user1).placePixel(0, 0, 0xff0000);
+
+      // Should fail immediately
+      await expect(megaplace.connect(user1).placePixel(1, 1, 0x00ff00))
+        .to.be.revertedWithCustomError(megaplace, "RateLimitExceeded");
+
+      // Should succeed after 5 seconds
+      await increaseTime(5);
+      await expect(megaplace.connect(user1).placePixel(1, 1, 0x00ff00))
+        .to.not.be.reverted;
+    });
+
+    it("Should use updated premium cost", async function () {
+      const newCost = ethers.parseEther("0.05");
+      await megaplace.connect(owner).setPremiumCost(newCost);
+
+      // Old price should fail
+      await expect(megaplace.connect(user1).grantPremiumAccess({ value: ethers.parseEther("0.01") }))
+        .to.be.revertedWithCustomError(megaplace, "IncorrectPaymentAmount");
+
+      // New price should succeed
+      await expect(megaplace.connect(user1).grantPremiumAccess({ value: newCost }))
+        .to.not.be.reverted;
     });
   });
 
@@ -399,7 +505,7 @@ describe("Megaplace", function () {
     it("Should reject non-owner calling withdraw", async function () {
       await expect(
         megaplace.connect(user1).withdraw()
-      ).to.be.revertedWith("Ownable: caller is not the owner");
+      ).to.be.revertedWithCustomError(megaplace, "OwnableUnauthorizedAccount");
     });
 
     it("Should handle withdrawing when balance is zero", async function () {
@@ -431,10 +537,10 @@ describe("Megaplace", function () {
 
       it("Should reject invalid coordinates", async function () {
         await expect(megaplace.getPixel(CANVAS_RES, 0))
-          .to.be.revertedWith("Megaplace: invalid coordinates");
+          .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
 
         await expect(megaplace.getPixel(0, CANVAS_RES))
-          .to.be.revertedWith("Megaplace: invalid coordinates");
+          .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
       });
     });
 
@@ -456,12 +562,13 @@ describe("Megaplace", function () {
 
       it("Should reject array length mismatch", async function () {
         await expect(megaplace.getPixelBatch([0, 1], [0]))
-          .to.be.revertedWith("Megaplace: array length mismatch");
+          .to.be.revertedWithCustomError(megaplace, "ArrayLengthMismatch");
       });
 
       it("Should reject empty batch", async function () {
         await expect(megaplace.getPixelBatch([], []))
-          .to.be.revertedWith("Megaplace: batch size must be 1-1000");
+          .to.be.revertedWithCustomError(megaplace, "InvalidBatchSize")
+          .withArgs(0, 1, 1000);
       });
 
       it("Should reject batch larger than 1000", async function () {
@@ -469,7 +576,8 @@ describe("Megaplace", function () {
         const y = Array(1001).fill(0);
 
         await expect(megaplace.getPixelBatch(x, y))
-          .to.be.revertedWith("Megaplace: batch size must be 1-1000");
+          .to.be.revertedWithCustomError(megaplace, "InvalidBatchSize")
+          .withArgs(1001, 1, 1000);
       });
 
       it("Should accept batch of 1000 pixels", async function () {
@@ -484,7 +592,7 @@ describe("Megaplace", function () {
 
       it("Should reject invalid coordinates in batch", async function () {
         await expect(megaplace.getPixelBatch([CANVAS_RES], [0]))
-          .to.be.revertedWith("Megaplace: invalid coordinates");
+          .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
       });
     });
 
@@ -507,31 +615,37 @@ describe("Megaplace", function () {
 
       it("Should reject invalid start coordinates", async function () {
         await expect(megaplace.getRegion(CANVAS_RES, 0, 1, 1))
-          .to.be.revertedWith("Megaplace: invalid start coordinates");
+          .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
 
         await expect(megaplace.getRegion(0, CANVAS_RES, 1, 1))
-          .to.be.revertedWith("Megaplace: invalid start coordinates");
+          .to.be.revertedWithCustomError(megaplace, "InvalidCoordinates");
       });
 
       it("Should reject region out of bounds", async function () {
         await expect(megaplace.getRegion(CANVAS_RES - 1, 0, 2, 1))
-          .to.be.revertedWith("Megaplace: region out of bounds");
+          .to.be.revertedWithCustomError(megaplace, "RegionOutOfBounds");
 
         await expect(megaplace.getRegion(0, CANVAS_RES - 1, 1, 2))
-          .to.be.revertedWith("Megaplace: region out of bounds");
+          .to.be.revertedWithCustomError(megaplace, "RegionOutOfBounds");
       });
 
-      it("Should accept large region size (100x100)", async function () {
+      it("Should reject region too large", async function () {
+        await expect(megaplace.getRegion(0, 0, 101, 100))
+          .to.be.revertedWithCustomError(megaplace, "RegionTooLarge")
+          .withArgs(10100, MAX_REGION_SIZE);
+      });
+
+      it("Should accept region at maximum size (100x100)", async function () {
         const colors = await megaplace.getRegion(0, 0, 100, 100);
         expect(colors.length).to.equal(10000);
       });
 
       it("Should reject zero width or height", async function () {
         await expect(megaplace.getRegion(0, 0, 0, 10))
-          .to.be.revertedWith("Megaplace: invalid dimensions");
+          .to.be.revertedWithCustomError(megaplace, "InvalidDimensions");
 
         await expect(megaplace.getRegion(0, 0, 10, 0))
-          .to.be.revertedWith("Megaplace: invalid dimensions");
+          .to.be.revertedWithCustomError(megaplace, "InvalidDimensions");
       });
     });
 

@@ -9,6 +9,10 @@ const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS || '0xF7bB0ba31c14ff85c58
 const DEPLOYMENT_BLOCK = BigInt(process.env.DEPLOYMENT_BLOCK || '4211820');
 const DATA_DIR = process.env.DATA_DIR || './data';
 
+// Save debounce configuration
+const SAVE_DEBOUNCE_MS = 5000; // 5 seconds
+const SAVE_MAX_WAIT_MS = 30000; // 30 seconds max wait
+
 // Define custom chain for MegaETH
 const megaethChain = {
     id: 6343,
@@ -52,6 +56,11 @@ export class EventListener {
     private storageFile: string;
     private isRunning = false;
     private unwatch?: () => void;
+
+    // Debounced save state
+    private saveTimeout: NodeJS.Timeout | null = null;
+    private lastSaveTime: number = 0;
+    private pendingSave: boolean = false;
 
     constructor() {
         // Determine if we should use WebSocket or HTTP based on URL
@@ -122,9 +131,9 @@ export class EventListener {
     }
 
     /**
-     * Save pixel data to JSON file
+     * Save pixel data to JSON file (immediate)
      */
-    private async saveStorage(): Promise<void> {
+    private async saveStorageImmediate(): Promise<void> {
         try {
             const dataToSave = {
                 ...this.storage,
@@ -132,10 +141,40 @@ export class EventListener {
             };
 
             await writeFile(this.storageFile, JSON.stringify(dataToSave, null, 2));
+            this.lastSaveTime = Date.now();
+            this.pendingSave = false;
             console.log(`✓ Saved ${this.storage.totalPixels} pixels to storage`);
         } catch (error) {
             console.error('✗ Error saving storage:', error);
         }
+    }
+
+    /**
+     * Save pixel data with debouncing
+     * - Waits SAVE_DEBOUNCE_MS after last change
+     * - But never waits more than SAVE_MAX_WAIT_MS
+     */
+    private saveStorage(): void {
+        this.pendingSave = true;
+        const timeSinceLastSave = Date.now() - this.lastSaveTime;
+
+        // Clear any existing timeout
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+        }
+
+        // If we've been waiting too long, save immediately
+        if (timeSinceLastSave >= SAVE_MAX_WAIT_MS) {
+            this.saveStorageImmediate();
+            return;
+        }
+
+        // Calculate how long we can still wait
+        const maxDelay = Math.min(SAVE_DEBOUNCE_MS, SAVE_MAX_WAIT_MS - timeSinceLastSave);
+
+        this.saveTimeout = setTimeout(() => {
+            this.saveStorageImmediate();
+        }, maxDelay);
     }
 
     /**
@@ -188,10 +227,11 @@ export class EventListener {
             if (error?.code === -32022 || error?.message?.includes('compute unit limit') || error?.message?.includes('rate limit')) {
                 if (retryCount < MAX_RETRIES) {
                     const delay = BASE_DELAY * Math.pow(2, retryCount); // Exponential backoff
+                    console.log(`⏳ Rate limited, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
                     await this.sleep(delay);
                     return this.processHistoricalEvents(fromBlock, toBlock, retryCount + 1);
                 } else {
-                    // Don't throw, just skip this batch and continue
+                    console.warn(`⚠️ Max retries reached for blocks ${fromBlock}-${toBlock}, skipping`);
                     return;
                 }
             }
@@ -204,27 +244,40 @@ export class EventListener {
      * Sync all historical events from deployment to current block
      */
     public async syncHistoricalEvents(): Promise<void> {
-        console.log('Syncing historical events...');
+        console.log('📡 Syncing historical events...');
 
         try {
             const currentBlock = await this.client.getBlockNumber();
             const startBlock = this.storage.lastProcessedBlock + 1n;
 
             if (startBlock > currentBlock) {
-                console.log('Already synced to latest block');
+                console.log('✓ Already synced to latest block');
                 return;
             }
+
+            const totalBlocks = currentBlock - startBlock + 1n;
+            console.log(`  Blocks to process: ${totalBlocks} (${startBlock} → ${currentBlock})`);
 
             // Process in smaller chunks to avoid RPC rate limits
             const CHUNK_SIZE = 1000n;
             const DELAY_BETWEEN_CHUNKS = 500;
             let fromBlock = startBlock;
+            let processedChunks = 0;
 
             while (fromBlock <= currentBlock) {
                 const toBlock = fromBlock + CHUNK_SIZE > currentBlock ? currentBlock : fromBlock + CHUNK_SIZE;
 
                 await this.processHistoricalEvents(fromBlock, toBlock);
-                await this.saveStorage();
+
+                // Use debounced save during sync
+                this.saveStorage();
+
+                processedChunks++;
+                const progress = ((Number(toBlock - startBlock) / Number(totalBlocks)) * 100).toFixed(1);
+
+                if (processedChunks % 10 === 0) {
+                    console.log(`  Progress: ${progress}% (block ${toBlock})`);
+                }
 
                 fromBlock = toBlock + 1n;
 
@@ -233,9 +286,11 @@ export class EventListener {
                 }
             }
 
-            console.log(`Sync complete. Total pixels: ${this.storage.totalPixels}`);
+            // Final save after sync
+            await this.saveStorageImmediate();
+            console.log(`✓ Sync complete. Total pixels: ${this.storage.totalPixels}`);
         } catch (error) {
-            console.error('Historical sync failed:', error);
+            console.error('✗ Historical sync failed:', error);
             throw error;
         }
     }
@@ -248,7 +303,7 @@ export class EventListener {
             return;
         }
 
-        console.log('Starting real-time event listener...');
+        console.log('👀 Starting real-time event listener...');
         this.isRunning = true;
 
         // Watch for new PixelPlaced events
@@ -276,10 +331,10 @@ export class EventListener {
 
                         this.storage.pixels[key] = pixelData;
 
-                        // Save periodically
-                        if (this.storage.totalPixels % 10 === 0) {
-                            this.saveStorage();
-                        }
+                        console.log(`🎨 Pixel at (${args.x}, ${args.y}) by ${(args.user as string).slice(0, 8)}...`);
+
+                        // Use debounced save for real-time events
+                        this.saveStorage();
                     }
                 }
             },
@@ -288,11 +343,13 @@ export class EventListener {
             },
         });
 
-        console.log('Watching for new pixels...');
+        console.log('✓ Watching for new pixels...');
 
-        // Auto-save every minute
+        // Auto-save every minute as a safety net
         setInterval(() => {
-            this.saveStorage();
+            if (this.pendingSave) {
+                this.saveStorageImmediate();
+            }
         }, 60000);
     }
 
@@ -303,6 +360,17 @@ export class EventListener {
         if (this.unwatch) {
             this.unwatch();
             this.isRunning = false;
+
+            // Clear any pending save timeout
+            if (this.saveTimeout) {
+                clearTimeout(this.saveTimeout);
+            }
+
+            // Final save on shutdown
+            if (this.pendingSave) {
+                this.saveStorageImmediate();
+            }
+
             console.log('○ Stopped watching for events');
         }
     }
@@ -312,10 +380,10 @@ export class EventListener {
      */
     public async initialize(): Promise<void> {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('     Megaplace Event Listener v1.0');
+        console.log('     Megaplace Event Listener v1.1');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-        console.log(`Contract: ${CONTRACT_ADDRESS}`);
-        console.log(`RPC: ${RPC_URL}\n`);
+        console.log(`📋 Contract: ${CONTRACT_ADDRESS}`);
+        console.log(`🌐 RPC: ${RPC_URL}\n`);
 
         await this.loadStorage();
         await this.syncHistoricalEvents();

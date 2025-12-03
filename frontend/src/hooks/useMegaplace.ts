@@ -1,10 +1,18 @@
 import { useAccount, useReadContract, useWriteContract, useWatchContractEvent, usePublicClient, useWaitForTransactionReceipt } from 'wagmi';
-import { parseEther } from 'viem';
+import { parseEther, type WalletClient, type Account, type Chain, type Transport } from 'viem';
 import type { Abi } from 'viem';
-import { MEGAPLACE_ADDRESS, MEGAPLACE_DEPLOYMENT_BLOCK } from '../contracts/config';
+import { MEGAPLACE_ADDRESS, megaethChain } from '../contracts/config';
 import MegaplaceABI from '../contracts/MegaplaceABI.json';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
+import {
+  CANVAS_RES,
+  COOLDOWN_REFETCH_INTERVAL_MS,
+  PREMIUM_REFETCH_INTERVAL_MS,
+  EVENT_POLLING_INTERVAL_MS,
+  DEFAULT_PREMIUM_COST_ETH,
+  DEFAULT_COOLDOWN_PIXELS,
+} from '../constants';
 
 // Type definitions
 export type Pixel = {
@@ -28,8 +36,10 @@ export type PixelsBatchPlacedEvent = {
 };
 
 // Hook to get cooldown status
-export function useCooldown() {
-  const { address } = useAccount();
+export function useCooldown(sessionAddress?: `0x${string}`) {
+  const { address: walletAddress } = useAccount();
+  // Use session address if provided, otherwise use main wallet
+  const address = sessionAddress || walletAddress;
 
   const { data, isLoading, refetch } = useReadContract({
     address: MEGAPLACE_ADDRESS,
@@ -38,7 +48,7 @@ export function useCooldown() {
     args: address ? [address] : undefined,
     query: {
       enabled: !!address,
-      refetchInterval: 1000, // Refetch every second to update countdown
+      refetchInterval: COOLDOWN_REFETCH_INTERVAL_MS,
       retry: (failureCount, error: any) => {
         // Don't retry on rate limit errors
         if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
@@ -51,10 +61,12 @@ export function useCooldown() {
 
   const canPlace = data?.[0] as boolean | undefined;
   const cooldownRemaining = data?.[1] as bigint | undefined;
+  const pixelsRemaining = data?.[2] as bigint | undefined;
 
   return {
     canPlace: canPlace ?? false,
     cooldownRemaining: cooldownRemaining ?? 0n,
+    pixelsRemaining: pixelsRemaining ?? BigInt(DEFAULT_COOLDOWN_PIXELS),
     isLoading,
     refetch,
   };
@@ -71,7 +83,7 @@ export function usePremiumAccess() {
     args: address ? [address] : undefined,
     query: {
       enabled: !!address,
-      refetchInterval: 5000, // Refetch every 5 seconds
+      refetchInterval: PREMIUM_REFETCH_INTERVAL_MS,
       retry: (failureCount, error: any) => {
         // Don't retry on rate limit errors
         if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
@@ -93,12 +105,12 @@ export function usePremiumAccess() {
   };
 }
 
-// Hook to place a pixel
+// Hook to place a pixel (using main wallet)
 export function usePlacePixel() {
   const { data: hash, writeContract, isPending, error } = useWriteContract();
   const { refetch: refetchCooldown } = useCooldown();
 
-  const placePixel = (x: number, y: number, color: number) => {
+  const placePixel = useCallback((x: number, y: number, color: number) => {
     writeContract(
       // @ts-expect-error - wagmi provides chain and account from config
       {
@@ -121,7 +133,7 @@ export function usePlacePixel() {
         },
       }
     );
-  };
+  }, [writeContract]);
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
     hash,
@@ -144,19 +156,94 @@ export function usePlacePixel() {
   };
 }
 
+// Hook to place a pixel using session key (fire and forget - instant, no wallet popup)
+export function usePlacePixelWithSessionKey(
+  getSessionWalletClient: () => WalletClient<Transport, Chain, Account> | null,
+  sessionAddress?: `0x${string}`
+) {
+  // Track multiple pending transactions for fire-and-forget
+  const [pendingCount, setPendingCount] = useState(0);
+  const [recentHashes, setRecentHashes] = useState<`0x${string}`[]>([]);
+  const [error, setError] = useState<Error | null>(null);
+  const { refetch: refetchCooldown } = useCooldown(sessionAddress);
+
+  // Fire and forget - send transaction and don't wait for confirmation
+  const placePixel = useCallback(async (x: number, y: number, color: number) => {
+    const sessionWalletClient = getSessionWalletClient();
+    if (!sessionWalletClient) {
+      toast.error('Session key not ready');
+      return;
+    }
+
+    setPendingCount(c => c + 1);
+    setError(null);
+
+    try {
+      // Send transaction using session key - fire and forget!
+      // @ts-expect-error - account is already in the wallet client
+      const txHash = await sessionWalletClient.writeContract({
+        address: MEGAPLACE_ADDRESS,
+        abi: MegaplaceABI as Abi,
+        functionName: 'placePixel',
+        args: [BigInt(x), BigInt(y), color],
+        chain: megaethChain,
+      });
+
+      console.log(`[Session Key] Tx sent for (${x}, ${y}):`, txHash);
+
+      // Keep track of recent hashes (for UI display if needed)
+      setRecentHashes(prev => [txHash, ...prev].slice(0, 10));
+
+      // Refetch cooldown immediately (optimistic)
+      refetchCooldown();
+
+    } catch (err: any) {
+      console.error('[Session Key] Failed to place pixel:', err);
+      setError(err);
+
+      if (err.message?.includes('insufficient funds')) {
+        toast.error('Session key needs funding', {
+          description: 'Fund your session key to place pixels',
+        });
+      } else if (err.message?.includes('RateLimitExceeded')) {
+        toast.error('Rate limit reached', {
+          description: 'Wait for cooldown to place more pixels',
+        });
+      } else {
+        // Don't spam errors for rapid clicking
+        console.warn('Pixel placement error:', err.message);
+      }
+    } finally {
+      setPendingCount(c => Math.max(0, c - 1));
+    }
+  }, [getSessionWalletClient, refetchCooldown]);
+
+  return {
+    placePixel,
+    pendingCount,
+    recentHashes,
+    // Keep old interface for compatibility
+    hash: recentHashes[0],
+    isPending: pendingCount > 0,
+    isConfirming: false, // Fire and forget - we don't wait
+    isConfirmed: false,
+    error,
+  };
+}
+
 // Hook to grant premium access
 export function useGrantPremiumAccess() {
   const { data: hash, writeContract, isPending, error } = useWriteContract();
   const { refetch: refetchPremium } = usePremiumAccess();
 
-  const grantPremiumAccess = () => {
+  const grantPremiumAccess = useCallback(() => {
     writeContract(
       // @ts-expect-error - wagmi provides chain and account from config
       {
         address: MEGAPLACE_ADDRESS,
         abi: MegaplaceABI as Abi,
         functionName: 'grantPremiumAccess',
-        value: parseEther('0.01'),
+        value: parseEther(DEFAULT_PREMIUM_COST_ETH),
       },
       {
         onError: (error) => {
@@ -172,7 +259,7 @@ export function useGrantPremiumAccess() {
         },
       }
     );
-  };
+  }, [writeContract]);
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
     hash,
@@ -222,7 +309,7 @@ export function useGetPixel(x: number, y: number) {
     functionName: 'getPixel',
     args: [BigInt(x), BigInt(y)],
     query: {
-      enabled: x >= 0 && y >= 0 && x < 1000 && y < 1000,
+      enabled: x >= 0 && y >= 0 && x < CANVAS_RES && y < CANVAS_RES,
     },
   });
 
@@ -273,7 +360,7 @@ export function usePlacePixelBatch() {
   const { data: hash, writeContract, isPending, error } = useWriteContract();
   const { refetch: refetchCooldown } = useCooldown();
 
-  const placePixelBatch = (xCoords: number[], yCoords: number[], colors: number[]) => {
+  const placePixelBatch = useCallback((xCoords: number[], yCoords: number[], colors: number[]) => {
     if (xCoords.length !== yCoords.length || xCoords.length !== colors.length) {
       throw new Error('Array lengths must match');
     }
@@ -307,7 +394,7 @@ export function usePlacePixelBatch() {
         },
       }
     );
-  };
+  }, [writeContract]);
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
     hash,
@@ -341,33 +428,33 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
     onPixelPlacedRef.current = onPixelPlaced;
   }, [onPixelPlaced]);
 
-  // Load recent historical events on mount - simplified to avoid rate limiting
-  // Instead of querying all historical events, we'll rely on contract storage reads
-  // and only watch for new real-time events
+  // Load recent historical events on mount
   useEffect(() => {
+    const abortController = new AbortController();
+
     const loadRecentPixelsFromStorage = async () => {
-      if (!publicClient) return;
+      if (!publicClient || abortController.signal.aborted) return;
 
       try {
         console.log('Loading recent pixels from contract storage...');
 
         // Sample 100 random coordinates to find recently placed pixels
-        // This avoids expensive historical event queries
         const SAMPLE_SIZE = 100;
-        const CANVAS_SIZE = 1000;
         const recentPixelsList: PixelPlacedEvent[] = [];
 
         const sampleCoords: { x: number; y: number }[] = [];
         for (let i = 0; i < SAMPLE_SIZE; i++) {
           sampleCoords.push({
-            x: Math.floor(Math.random() * CANVAS_SIZE),
-            y: Math.floor(Math.random() * CANVAS_SIZE),
+            x: Math.floor(Math.random() * CANVAS_RES),
+            y: Math.floor(Math.random() * CANVAS_RES),
           });
         }
 
         // Batch read pixels
         const xCoords = sampleCoords.map(c => BigInt(c.x));
         const yCoords = sampleCoords.map(c => BigInt(c.y));
+
+        if (abortController.signal.aborted) return;
 
         // @ts-expect-error - viem type mismatch
         const pixelData = await publicClient.readContract({
@@ -376,6 +463,8 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
           functionName: 'getPixelBatch',
           args: [xCoords, yCoords],
         });
+
+        if (abortController.signal.aborted) return;
 
         const colors = pixelData[0] as number[];
         const placedByAddresses = pixelData[1] as string[];
@@ -400,6 +489,8 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
           .sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1))
           .slice(0, 20);
 
+        if (abortController.signal.aborted) return;
+
         console.log(`Found ${sortedPixels.length} recent pixels from storage sampling`);
         setRecentPixels(sortedPixels);
 
@@ -412,6 +503,7 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
 
         console.log('Recent pixels loaded from storage');
       } catch (error: any) {
+        if (abortController.signal.aborted) return;
         console.error('Error loading recent pixels from storage:', error);
         if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
           toast.error('Rate Limited', {
@@ -422,24 +514,29 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
     };
 
     loadRecentPixelsFromStorage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicClient]); // Only depend on publicClient to avoid infinite loops
+
+    return () => {
+      abortController.abort();
+    };
+  }, [publicClient]);
 
   // MegaETH Realtime API: Manual polling with getLogs
-  // This avoids filter expiration issues and works reliably with all RPC providers
   const lastProcessedBlockRef = useRef<bigint>(0n);
 
   useEffect(() => {
     if (!publicClient) return;
 
-    let isActive = true;
-    let intervalId: NodeJS.Timeout;
+    const abortController = new AbortController();
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
     const pollForNewEvents = async () => {
-      if (!isActive) return;
+      if (abortController.signal.aborted) return;
 
       try {
         const currentBlock = await publicClient.getBlockNumber();
+
+        if (abortController.signal.aborted) return;
+
         const fromBlock = lastProcessedBlockRef.current === 0n
           ? currentBlock
           : lastProcessedBlockRef.current + 1n;
@@ -463,10 +560,14 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
             toBlock: currentBlock,
           });
 
+          if (abortController.signal.aborted) return;
+
           if (logs.length > 0) {
             console.log(`[Event Watch] Received ${logs.length} new PixelPlaced events (blocks ${fromBlock}-${currentBlock})`);
 
             logs.forEach((log: any) => {
+              if (abortController.signal.aborted) return;
+
               try {
                 if (!log.args) {
                   console.warn('[Event Watch] Log missing args:', log);
@@ -517,6 +618,7 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
           lastProcessedBlockRef.current = currentBlock;
         }
       } catch (error: any) {
+        if (abortController.signal.aborted) return;
         console.error('[Event Watch] Error polling for events:', error);
         if (error?.message?.includes('rate limit') || error?.message?.includes('-32005') || error?.code === -32005) {
           toast.error('Rate Limited', {
@@ -529,11 +631,11 @@ export function useWatchPixelPlaced(onPixelPlaced?: (event: PixelPlacedEvent) =>
     // Initial poll
     pollForNewEvents();
 
-    // Set up polling interval - check every 500ms for MegaETH's fast blocks
-    intervalId = setInterval(pollForNewEvents, 500);
+    // Set up polling interval
+    intervalId = setInterval(pollForNewEvents, EVENT_POLLING_INTERVAL_MS);
 
     return () => {
-      isActive = false;
+      abortController.abort();
       if (intervalId) {
         clearInterval(intervalId);
       }
@@ -582,7 +684,7 @@ export function hexToUint32(hex: string): number {
 export function useAdminGrantPremiumAccess() {
   const { data: hash, writeContract, isPending, error } = useWriteContract();
 
-  const adminGrantPremiumAccess = (userAddress: string) => {
+  const adminGrantPremiumAccess = useCallback((userAddress: string) => {
     // @ts-expect-error - wagmi provides chain and account from config
     writeContract({
       address: MEGAPLACE_ADDRESS,
@@ -590,7 +692,7 @@ export function useAdminGrantPremiumAccess() {
       functionName: 'adminGrantPremiumAccess',
       args: [userAddress],
     });
-  };
+  }, [writeContract]);
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
     hash,
@@ -610,7 +712,7 @@ export function useAdminGrantPremiumAccess() {
 export function useAdminGrantPremiumAccessBatch() {
   const { data: hash, writeContract, isPending, error } = useWriteContract();
 
-  const adminGrantPremiumAccessBatch = (userAddresses: string[]) => {
+  const adminGrantPremiumAccessBatch = useCallback((userAddresses: string[]) => {
     // @ts-expect-error - wagmi provides chain and account from config
     writeContract({
       address: MEGAPLACE_ADDRESS,
@@ -618,7 +720,7 @@ export function useAdminGrantPremiumAccessBatch() {
       functionName: 'adminGrantPremiumAccessBatch',
       args: [userAddresses],
     });
-  };
+  }, [writeContract]);
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
     hash,
@@ -638,14 +740,14 @@ export function useAdminGrantPremiumAccessBatch() {
 export function useWithdraw() {
   const { data: hash, writeContract, isPending, error } = useWriteContract();
 
-  const withdraw = () => {
+  const withdraw = useCallback(() => {
     // @ts-expect-error - wagmi provides chain and account from config
     writeContract({
       address: MEGAPLACE_ADDRESS,
       abi: MegaplaceABI as Abi,
       functionName: 'withdraw',
     });
-  };
+  }, [writeContract]);
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
     hash,
@@ -668,7 +770,7 @@ export function useWatchPixelsBatchPlaced(onBatchPlaced?: (event: PixelsBatchPla
     abi: MegaplaceABI as Abi,
     eventName: 'PixelsBatchPlaced',
     poll: true,
-    pollingInterval: 100,
+    pollingInterval: EVENT_POLLING_INTERVAL_MS,
     onLogs(logs) {
       logs.forEach((log: any) => {
         try {
