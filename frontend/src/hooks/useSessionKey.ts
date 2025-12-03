@@ -28,7 +28,7 @@ export function useSessionKey() {
   const { address: mainWalletAddress } = useAccount();
   const publicClient = usePublicClient();
   const { data: mainWalletClient } = useWalletClient();
-  
+
   const [state, setState] = useState<SessionKeyState>({
     privateKey: null,
     address: null,
@@ -37,7 +37,7 @@ export function useSessionKey() {
     isFunding: false,
     needsFunding: false,
   });
-  
+
   const sessionWalletClientRef = useRef<WalletClient<Transport, Chain, Account> | null>(null);
   const balancePollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -46,7 +46,7 @@ export function useSessionKey() {
     const initSessionKey = () => {
       try {
         let privateKey = localStorage.getItem(SESSION_KEY_STORAGE_KEY) as `0x${string}` | null;
-        
+
         if (!privateKey) {
           privateKey = generatePrivateKey();
           localStorage.setItem(SESSION_KEY_STORAGE_KEY, privateKey);
@@ -54,44 +54,44 @@ export function useSessionKey() {
         } else {
           console.log('[Session Key] Loaded existing session key');
         }
-        
+
         const account = privateKeyToAccount(privateKey);
-        
+
         // Create wallet client for session key
         const walletClient = createWalletClient({
           account,
           chain: megaethChain,
           transport: http('https://timothy.megaeth.com/rpc'),
         });
-        
+
         sessionWalletClientRef.current = walletClient;
-        
+
         setState(prev => ({
           ...prev,
           privateKey,
           address: account.address,
           isLoading: false,
         }));
-        
+
         console.log('[Session Key] Address:', account.address);
       } catch (error) {
         console.error('[Session Key] Failed to initialize:', error);
         setState(prev => ({ ...prev, isLoading: false }));
       }
     };
-    
+
     initSessionKey();
   }, []);
 
   // Poll balance
   useEffect(() => {
     if (!state.address || !publicClient) return;
-    
+
     const checkBalance = async () => {
       try {
         const balance = await publicClient.getBalance({ address: state.address! });
         const minBalance = parseEther(SESSION_KEY_FUNDING_AMOUNT) / 2n; // Need at least half the funding amount
-        
+
         setState(prev => ({
           ...prev,
           balance,
@@ -101,13 +101,13 @@ export function useSessionKey() {
         console.error('[Session Key] Failed to check balance:', error);
       }
     };
-    
+
     // Initial check
     checkBalance();
-    
+
     // Poll every 5 seconds
     balancePollingRef.current = setInterval(checkBalance, 5000);
-    
+
     return () => {
       if (balancePollingRef.current) {
         clearInterval(balancePollingRef.current);
@@ -121,27 +121,27 @@ export function useSessionKey() {
       toast.error('Connect wallet first');
       return false;
     }
-    
+
     setState(prev => ({ ...prev, isFunding: true }));
-    
+
     try {
       const fundingAmount = parseEther(SESSION_KEY_FUNDING_AMOUNT);
-      
+
       console.log(`[Session Key] Funding with ${SESSION_KEY_FUNDING_AMOUNT} ETH from ${mainWalletAddress}`);
-      
+
       const hash = await mainWalletClient.sendTransaction({
         to: state.address,
         value: fundingAmount,
-      });
-      
+      } as any);
+
       console.log('[Session Key] Funding tx:', hash);
       toast.success('Session key funded!', {
         description: `${SESSION_KEY_FUNDING_AMOUNT} ETH sent`,
       });
-      
+
       // Wait a bit for the balance to update
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // Refresh balance
       if (publicClient) {
         const newBalance = await publicClient.getBalance({ address: state.address });
@@ -153,7 +153,7 @@ export function useSessionKey() {
           isFunding: false,
         }));
       }
-      
+
       return true;
     } catch (error: any) {
       console.error('[Session Key] Failed to fund:', error);
@@ -175,17 +175,17 @@ export function useSessionKey() {
     localStorage.removeItem(SESSION_KEY_STORAGE_KEY);
     const newPrivateKey = generatePrivateKey();
     localStorage.setItem(SESSION_KEY_STORAGE_KEY, newPrivateKey);
-    
+
     const account = privateKeyToAccount(newPrivateKey);
-    
+
     const walletClient = createWalletClient({
       account,
       chain: megaethChain,
       transport: http('https://timothy.megaeth.com/rpc'),
     });
-    
+
     sessionWalletClientRef.current = walletClient;
-    
+
     setState(prev => ({
       ...prev,
       privateKey: newPrivateKey,
@@ -193,7 +193,7 @@ export function useSessionKey() {
       balance: 0n,
       needsFunding: true,
     }));
-    
+
     toast.info('Session key reset', {
       description: 'A new session key has been generated',
     });
